@@ -258,7 +258,6 @@ pub fn App() -> impl IntoView {
 
                         <div class="card" node_ref=candles_ref>
                             <div class="section-header">
-                                <div class="section-number">"1"</div>
                                 <h2 class="section-title">"Candlestick Chart"</h2>
                             </div>
                             <div class="chart-container">
@@ -268,7 +267,6 @@ pub fn App() -> impl IntoView {
 
                         <div class="card" node_ref=live_ref>
                             <div class="section-header">
-                                <div class="section-number" style="background:#10b981">"2"</div>
                                 <h2 class="section-title">"Live Candlestick (Real-time)"</h2>
                             </div>
                             <div class="chart-container">
@@ -278,7 +276,6 @@ pub fn App() -> impl IntoView {
 
                         <div class="card" node_ref=bar_ref>
                             <div class="section-header">
-                                <div class="section-number" style="background:#8b5cf6">"3"</div>
                                 <h2 class="section-title">"Bar Chart — Volume"</h2>
                             </div>
                             <div class="chart-container">
@@ -288,7 +285,6 @@ pub fn App() -> impl IntoView {
 
                         <div class="card" node_ref=line_ref>
                             <div class="section-header">
-                                <div class="section-number" style="background:#ec4899">"4"</div>
                                 <h2 class="section-title">"Line Chart — Revenue vs Expenses"</h2>
                             </div>
                             <div class="chart-container">
@@ -307,7 +303,6 @@ pub fn App() -> impl IntoView {
 
                         <div class="card" node_ref=pie_ref>
                             <div class="section-header">
-                                <div class="section-number" style="background:#f59e0b">"5"</div>
                                 <h2 class="section-title">"Pie Chart — Portfolio Allocation"</h2>
                             </div>
                             <div class="chart-container">
@@ -317,7 +312,6 @@ pub fn App() -> impl IntoView {
 
                         <div class="card" node_ref=doughnut_ref>
                             <div class="section-header">
-                                <div class="section-number" style="background:#14b8a6">"6"</div>
                                 <h2 class="section-title">"Doughnut Chart — Sector Exposure"</h2>
                             </div>
                             <div class="chart-container">
