@@ -170,7 +170,7 @@ pub fn BarChart(
     });
 
     view! {
-        <div style="width: 90%;">
+        <div style="width: 100%;">
             <div style="position: relative;">
                 <canvas
                     node_ref=canvas_ref
