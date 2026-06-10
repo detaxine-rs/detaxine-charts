@@ -70,8 +70,9 @@ fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
 
 #[component]
 pub fn CandlestickChart(
-    /// Reactive signal — push new candles and the chart updates automatically.
-    data: Signal<Vec<Candle>>,
+    /// Accepts a reactive signal — push new candles and the chart updates automatically.
+    #[prop(into)]
+    data: MaybeProp<Vec<Candle>>,
     #[prop(optional, default = Default::default())] config: CandlestickChartConfig,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
@@ -81,7 +82,7 @@ pub fn CandlestickChart(
 
     // view window — initialised from current data length, clamped on each update
     let view_start = RwSignal::new(0usize);
-    let view_end = RwSignal::new(data.get_untracked().len());
+    let view_end = RwSignal::new(data.get_untracked().unwrap_or_default().len());
 
     // track whether the view is pinned to the latest candle
     // when true, new candles scroll the view automatically
@@ -122,7 +123,9 @@ pub fn CandlestickChart(
             return;
         };
 
-        let all_data = data.get();
+        let Some(all_data) = data.get() else {
+            return;
+        };
         let total = all_data.len();
 
         // clamp view window to current data length
@@ -143,7 +146,7 @@ pub fn CandlestickChart(
 
     // effect 1 — handle pinning when new data arrives
     Effect::new(move |_| {
-        let total = data.get().len(); // tracked
+        let total = data.get().unwrap_or_default().len(); // tracked
 
         if pinned_to_latest.get_untracked() {
             let visible = view_end.get_untracked() - view_start.get_untracked();
@@ -177,7 +180,7 @@ pub fn CandlestickChart(
         let axis_padding = 60.0;
         let chart_width = canvas.client_width() as f64 - axis_padding * 2.0;
 
-        let total = data.get_untracked().len();
+        let total = data.get_untracked().unwrap_or_default().len();
         let start = view_start.get_untracked();
         let end = view_end.get_untracked();
         let visible = end - start;
@@ -235,7 +238,7 @@ pub fn CandlestickChart(
         let y = e.client_y() as f64 - rect.top();
 
         if is_dragging.get_value() {
-            let total = data.get_untracked().len();
+            let total = data.get_untracked().unwrap_or_default().len();
             let axis_padding = 60.0;
             let chart_width = canvas.client_width() as f64 - axis_padding * 2.0;
             let (drag_start, drag_end) = drag_start_view.get_value();
@@ -327,7 +330,7 @@ pub fn CandlestickChart(
                 {move || {
                     let start = view_start.get();
                     let end = view_end.get();
-                    let total = data.get().len();
+                    let total = data.get().unwrap_or_default().len();
                     format!("Showing {} of {} candles", end - start, total)
                 }}
                 <span>"·"</span>

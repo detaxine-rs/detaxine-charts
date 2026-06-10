@@ -69,8 +69,9 @@ fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
 
 #[component]
 pub fn BarChart(
-    /// Reactive signal — update data and the chart redraws automatically.
-    data: Signal<Vec<DataPoint>>,
+    /// Accepts a reactive signal — update data and the chart redraws automatically.
+    #[prop(into)]
+    data: MaybeProp<Vec<DataPoint>>,
     #[prop(optional, default = Default::default())] config: BarChartConfig,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
@@ -108,13 +109,11 @@ pub fn BarChart(
             return;
         };
 
-        let rects = draw_bar_chart(
-            &context,
-            width,
-            height,
-            &data.get_untracked(),
-            &config.get_value(),
-        );
+        let Some(data) = data.get_untracked() else {
+            return;
+        };
+
+        let rects = draw_bar_chart(&context, width, height, &data, &config.get_value());
         bar_rects.set_value(rects);
     };
 

@@ -87,7 +87,8 @@ fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
 #[component]
 pub fn LineCurveChart(
     /// Reactive signal — update data and the chart redraws automatically.
-    data: Signal<Vec<(Series, Vec<DataPoint>)>>,
+    #[prop(into)]
+    data: MaybeProp<Vec<(Series, Vec<DataPoint>)>>,
     /// Reactive signal — update x labels and the chart redraws automatically.
     x: Signal<Vec<String>>,
     #[prop(optional, default = Default::default())] config: LineCurveChartConfig,
@@ -99,6 +100,7 @@ pub fn LineCurveChart(
 
     let series_meta = Memo::new(move |_| {
         data.get()
+            .unwrap_or_default()
             .iter()
             .map(|(s, _)| (s.name.clone(), s.color.clone()))
             .collect::<Vec<_>>()
@@ -136,11 +138,15 @@ pub fn LineCurveChart(
             return;
         };
 
+        let Some(data) = data.get_untracked() else {
+            return;
+        };
+
         let positions = draw_multiline_chart(
             &context,
             width,
             height,
-            &data.get_untracked(),
+            &data,
             &x.get_untracked(),
             &config.get_value(),
         );
