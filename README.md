@@ -1,6 +1,7 @@
 # detaxine-charts
-![Detaxine Charts CI](https://github.com/elonaire/detaxine-charts/actions/workflows/main.yml/badge.svg?branch=)
 ![Stable Version](https://img.shields.io/crates/v/detaxine-charts)
+[![Docs.rs](https://docs.rs/detaxine-ui/badge.svg)](https://docs.rs/detaxine-ui)
+![Detaxine Charts CI](https://github.com/elonaire/detaxine-charts/actions/workflows/main.yml/badge.svg?branch=)
 
 A high-performance, canvas-based charting library for [Leptos](https://leptos.dev). Every chart is responsive by default, supports tooltips on hover, redraws automatically on window resize, and accepts reactive signals for live data streaming.
 

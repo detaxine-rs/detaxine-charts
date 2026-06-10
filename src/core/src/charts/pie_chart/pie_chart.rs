@@ -57,8 +57,9 @@ fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
 
 #[component]
 pub fn PieChart(
-    /// Reactive signal — update data and the chart redraws automatically.
-    data: Signal<Vec<DataPoint>>,
+    /// Accepts a reactive signal — update data and the chart redraws automatically.
+    #[prop(into)]
+    data: MaybeProp<Vec<DataPoint>>,
     #[prop(optional, default = Default::default())] config: PieChartConfig,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
@@ -68,6 +69,7 @@ pub fn PieChart(
 
     let legend_meta = Memo::new(move |_| {
         data.get()
+            .unwrap_or_default()
             .iter()
             .map(|d| (d.name.clone(), d.color.clone()))
             .collect::<Vec<_>>()
@@ -105,7 +107,11 @@ pub fn PieChart(
             return;
         };
 
-        let slices = draw_pie_chart(&context, width, height, &data.get_untracked());
+        let Some(data) = data.get_untracked() else {
+            return;
+        };
+
+        let slices = draw_pie_chart(&context, width, height, &data);
         slice_positions.set_value(slices);
     };
 

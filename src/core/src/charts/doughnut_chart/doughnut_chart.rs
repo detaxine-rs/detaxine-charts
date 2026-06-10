@@ -41,9 +41,10 @@ fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
 
 #[component]
 pub fn DoughnutChart(
-    /// Reactive signal — update data and the chart redraws automatically.
+    /// Accepts a reactive signal — update data and the chart redraws automatically.
     /// Each tuple is (label, value, color).
-    data: Signal<Vec<(String, i32, String)>>,
+    #[prop(into)]
+    data: MaybeProp<Vec<(String, i32, String)>>,
     #[prop(optional, default = Default::default())] config: DoughnutChartConfig,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
@@ -53,6 +54,7 @@ pub fn DoughnutChart(
 
     let legend_meta = Memo::new(move |_| {
         data.get()
+            .unwrap_or_default()
             .iter()
             .map(|(label, _, color)| (label.clone(), color.clone()))
             .collect::<Vec<_>>()
@@ -90,7 +92,11 @@ pub fn DoughnutChart(
             return;
         };
 
-        let segments = draw_doughnut_chart(&context, width, height, &data.get_untracked());
+        let Some(data) = data.get_untracked() else {
+            return;
+        };
+
+        let segments = draw_doughnut_chart(&context, width, height, &data);
         segment_positions.set_value(segments);
     };
 
