@@ -74,25 +74,25 @@ fn initial_metrics() -> Vec<(Series, Vec<LinePoint>)> {
         (
             Series::new("Revenue", "#4f46e5"),
             vec![
-                LinePoint::new(142),
-                LinePoint::new(158),
-                LinePoint::new(149),
-                LinePoint::new(163),
-                LinePoint::new(171),
-                LinePoint::new(168),
-                LinePoint::new(175),
+                LinePoint::new(142_000),
+                LinePoint::new(158_000),
+                LinePoint::new(149_000),
+                LinePoint::new(163_000),
+                LinePoint::new(171_000),
+                LinePoint::new(168_000),
+                LinePoint::new(175_000),
             ],
         ),
         (
             Series::new("Expenses", "#e11d48"),
             vec![
-                LinePoint::new(98),
-                LinePoint::new(104),
-                LinePoint::new(99),
-                LinePoint::new(112),
-                LinePoint::new(108),
-                LinePoint::new(115),
-                LinePoint::new(110),
+                LinePoint::new(98_000),
+                LinePoint::new(104_000),
+                LinePoint::new(99_000),
+                LinePoint::new(112_000),
+                LinePoint::new(108_000),
+                LinePoint::new(115_000),
+                LinePoint::new(110_000),
             ],
         ),
     ]
@@ -121,7 +121,7 @@ fn portfolio_allocation() -> Vec<PiePoint> {
     ]
 }
 
-fn sector_exposure() -> Vec<(String, i32, String)> {
+fn sector_exposure() -> Vec<(String, i64, String)> {
     vec![
         ("US Equities".into(), 45, "#4f46e5".into()),
         ("International".into(), 25, "#0891b2".into()),
@@ -131,7 +131,7 @@ fn sector_exposure() -> Vec<(String, i32, String)> {
     ]
 }
 
-// ── Component ───────────────────────────────────────────────────
+// Component
 #[component]
 pub fn App() -> impl IntoView {
     let candles_ref: NodeRef<Div> = NodeRef::new();
@@ -290,11 +290,11 @@ pub fn App() -> impl IntoView {
                             <div class="chart-container">
                                 <LineCurveChart
                                     data=metrics.signal()
-                                    x=x_labels.into()
+                                    x=x_labels
                                     config=LineCurveChartConfig {
                                         show_area_chart: true,
                                         x_axis_title: "Day".to_string(),
-                                        y_axis_title: "USD (k)".to_string(),
+                                        y_axis_title: "USD".to_string(),
                                         ..Default::default()
                                     }
                                 />

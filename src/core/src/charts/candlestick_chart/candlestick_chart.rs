@@ -7,6 +7,8 @@ use web_sys::{
     CanvasRenderingContext2d, HtmlCanvasElement, HtmlElement, wasm_bindgen::JsCast, window,
 };
 
+use crate::utils::number_format::format_with_commas;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CandlestickChartConfig {
     pub bullish_color: String,
@@ -70,28 +72,26 @@ fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
 
 #[component]
 pub fn CandlestickChart(
-    /// Accepts a reactive signal — push new candles and the chart updates automatically.
-    #[prop(into)]
-    data: MaybeProp<Vec<Candle>>,
+    #[prop(into)] data: MaybeProp<Vec<Candle>>,
     #[prop(optional, default = Default::default())] config: CandlestickChartConfig,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
     let tooltip_ref = NodeRef::<Div>::new();
+    let crosshair_ref = NodeRef::<Div>::new();
     let candle_positions = StoredValue::new(Vec::<CandlePos>::new());
     let config = StoredValue::new(config);
 
-    // view window — initialised from current data length, clamped on each update
     let view_start = RwSignal::new(0usize);
     let view_end = RwSignal::new(data.get_untracked().unwrap_or_default().len());
-
-    // track whether the view is pinned to the latest candle
-    // when true, new candles scroll the view automatically
     let pinned_to_latest = RwSignal::new(true);
 
-    // drag state
     let is_dragging = StoredValue::new(false);
     let drag_start_x = StoredValue::new(0.0f64);
     let drag_start_view = StoredValue::new((0usize, 0usize));
+
+    // NEW — tracks which candle (by index in the visible slice) is currently hovered
+    let hovered_index = RwSignal::new(None::<usize>);
+    let mouse_x = StoredValue::new(0.0f64);
 
     let redraw = move || {
         let Some(canvas) = canvas_ref.get() else {
@@ -123,12 +123,9 @@ pub fn CandlestickChart(
             return;
         };
 
-        let Some(all_data) = data.get() else {
-            return;
-        };
+        let Some(all_data) = data.get() else { return };
         let total = all_data.len();
 
-        // clamp view window to current data length
         let start = view_start.get().min(total.saturating_sub(1));
         let end = view_end.get().min(total);
         let (start, end) = if start >= end {
@@ -138,16 +135,53 @@ pub fn CandlestickChart(
         };
 
         let data_slice = all_data[start..end].to_vec();
-        let config = config.get_value();
+        let config_val = config.get_value();
 
-        let candles = draw_candlestick_chart(&context, width, height, &data_slice, &config);
-        candle_positions.set_value(candles);
+        let candles = draw_candlestick_chart(&context, width, height, &data_slice, &config_val);
+        candle_positions.set_value(candles.clone());
+
+        // NEW — keep tooltip & crosshair in sync with fresh data while hovering
+        if let Some(idx) = hovered_index.get_untracked() {
+            if let Some(candle) = candles.get(idx) {
+                if let Some(tooltip) = tooltip_ref.get_untracked() {
+                    let tooltip_el: HtmlElement = tooltip.into();
+                    tooltip_el.set_inner_html(&format!(
+                        "<strong>{}</strong><br/>O: {:.2}  H: {:.2}  L: {:.2}  C: {:.2}",
+                        candle.label, candle.open, candle.high, candle.low, candle.close,
+                    ));
+
+                    let canvas_width = canvas.client_width() as f64;
+                    let tooltip_width = tooltip_el.offset_width() as f64;
+                    let gap = 10.0;
+                    let cursor_x = mouse_x.get_value();
+                    let left = if cursor_x + gap + tooltip_width > canvas_width {
+                        (cursor_x - gap - tooltip_width).max(0.0)
+                    } else {
+                        cursor_x + gap
+                    };
+                    let _ = tooltip_el
+                        .style()
+                        .set_property("left", &format!("{}px", left));
+                }
+                if let Some(crosshair) = crosshair_ref.get_untracked() {
+                    let crosshair_el: HtmlElement = crosshair.into();
+                    let crosshair_x = candle.x + candle.width / 2.0;
+                    let _ = crosshair_el
+                        .style()
+                        .set_property("left", &format!("{}px", crosshair_x));
+                }
+            } else {
+                // hovered candle fell out of view (e.g. window shrank) — hide
+                hovered_index.set(None);
+                if let Some(tooltip) = tooltip_ref.get_untracked() {
+                    let _: HtmlElement = tooltip.into();
+                }
+            }
+        }
     };
 
-    // effect 1 — handle pinning when new data arrives
     Effect::new(move |_| {
-        let total = data.get().unwrap_or_default().len(); // tracked
-
+        let total = data.get().unwrap_or_default().len();
         if pinned_to_latest.get_untracked() {
             let visible = view_end.get_untracked() - view_start.get_untracked();
             let new_end = total;
@@ -157,10 +191,9 @@ pub fn CandlestickChart(
         }
     });
 
-    // effect 2 — redraw when view window changes
     Effect::new(move |_| {
-        let _ = view_start.get(); // tracked
-        let _ = view_end.get(); // tracked
+        let _ = view_start.get();
+        let _ = view_end.get();
         redraw();
     });
 
@@ -168,7 +201,6 @@ pub fn CandlestickChart(
         redraw();
     });
 
-    // zoom
     let canvas_wheel_handler = move |e: ev::WheelEvent| {
         let Some(canvas) = canvas_ref.get() else {
             return;
@@ -195,7 +227,6 @@ pub fn CandlestickChart(
         let new_end = (new_start + new_visible).min(total);
         let new_start = new_end.saturating_sub(new_visible);
 
-        // unpin from latest if user zooms away from the edge
         if new_end < total {
             pinned_to_latest.set(false);
         } else {
@@ -204,11 +235,9 @@ pub fn CandlestickChart(
 
         view_start.set(new_start);
         view_end.set(new_end);
-
         e.prevent_default();
     };
 
-    // pan — mousedown
     let canvas_mousedown_handler = move |e: ev::MouseEvent| {
         let Some(canvas) = canvas_ref.get() else {
             return;
@@ -222,13 +251,15 @@ pub fn CandlestickChart(
         drag_start_view.set_value((view_start.get_untracked(), view_end.get_untracked()));
     };
 
-    // pan + tooltip — mousemove
     let canvas_mousemove_handler = move |e: ev::MouseEvent| {
         let Some(canvas) = canvas_ref.get() else {
             return;
         };
         let canvas: HtmlCanvasElement = canvas.into();
         let Some(tooltip) = tooltip_ref.get() else {
+            return;
+        };
+        let Some(crosshair) = crosshair_ref.get() else {
             return;
         };
         let Some(win) = window() else { return };
@@ -250,7 +281,6 @@ pub fn CandlestickChart(
                 (drag_start as isize + delta_candles).clamp(0, (total - visible) as isize) as usize;
             let new_end = new_start + visible;
 
-            // unpin if user drags away from the latest candle
             if new_end < total {
                 pinned_to_latest.set(false);
             } else {
@@ -261,30 +291,68 @@ pub fn CandlestickChart(
             view_end.set(new_end);
         }
 
-        // tooltip hit-test
         let device_pixel_ratio = win.device_pixel_ratio();
         let scale_x = canvas.client_width() as f64 / canvas.width() as f64 * device_pixel_ratio;
-        let scale_y = canvas.client_height() as f64 / canvas.height() as f64 * device_pixel_ratio;
         let lx = x * scale_x;
-        let ly = y * scale_y;
 
-        let hovered = candle_positions
-            .get_value()
-            .into_iter()
-            .find(|c| lx >= c.x && lx <= c.x + c.width && ly >= c.y && ly <= c.y + c.height);
+        let positions = candle_positions.get_value();
+        let hovered = positions
+            .iter()
+            .enumerate()
+            .find(|(_, c)| lx >= c.x && lx <= c.x + c.width);
 
         let tooltip_el: HtmlElement = tooltip.into();
-        let style = tooltip_el.style();
-        if let Some(candle) = hovered {
-            let _ = style.set_property("display", "block");
-            let _ = style.set_property("left", &format!("{}px", x + 10.0));
-            let _ = style.set_property("top", &format!("{}px", y - 28.0));
+        let crosshair_el: HtmlElement = crosshair.into();
+        let tooltip_style = tooltip_el.style();
+        let crosshair_style = crosshair_el.style();
+
+        if let Some((idx, candle)) = hovered {
+            hovered_index.set(Some(idx));
+            mouse_x.set_value(x);
+
             tooltip_el.set_inner_html(&format!(
-                "<strong>{}</strong><br/>O: {:.2}  H: {:.2}  L: {:.2}  C: {:.2}",
-                candle.label, candle.open, candle.high, candle.low, candle.close,
+                "<strong>{}</strong><br/>O: {}  H: {}  L: {}  C: {}",
+                candle.label,
+                format_with_commas(candle.open, Some(2)),
+                format_with_commas(candle.high, Some(2)),
+                format_with_commas(candle.low, Some(2)),
+                format_with_commas(candle.close, Some(2)),
             ));
+            let _ = tooltip_style.set_property("display", "block");
+
+            let tooltip_width = tooltip_el.offset_width() as f64;
+            let canvas_width = canvas.client_width() as f64;
+            let gap = 10.0;
+            let left = if x + gap + tooltip_width > canvas_width {
+                (x - gap - tooltip_width).max(0.0)
+            } else {
+                x + gap
+            };
+            let _ = tooltip_style.set_property("left", &format!("{}px", left));
+            let _ = tooltip_style.set_property("top", &format!("{}px", y - 28.0));
+
+            let crosshair_x = candle.x + candle.width / 2.0;
+            let _ = crosshair_style.set_property("display", "block");
+            let _ = crosshair_style.set_property("left", &format!("{}px", crosshair_x));
+            let _ =
+                crosshair_style.set_property("height", &format!("{}px", canvas.client_height()));
         } else {
-            let _ = style.set_property("display", "none");
+            hovered_index.set(None);
+            let _ = tooltip_style.set_property("display", "none");
+            let _ = crosshair_style.set_property("display", "none");
+        }
+    };
+
+    let canvas_mouseleave_handler = move |_: ev::MouseEvent| {
+        is_dragging.set_value(false);
+        hovered_index.set(None);
+        if let Some(tooltip) = tooltip_ref.get() {
+            let tooltip_el: HtmlElement = tooltip.into();
+            let _ = tooltip_el.style().set_property("display", "none");
+        }
+        if let Some(crosshair) = crosshair_ref.get() {
+            let crosshair_el: HtmlElement = crosshair.into();
+            let _ = crosshair_el.style().set_property("display", "none");
         }
     };
 
@@ -306,6 +374,18 @@ pub fn CandlestickChart(
                     on:mousedown=canvas_mousedown_handler
                     on:mousemove=canvas_mousemove_handler
                     on:mouseup=canvas_mouseup_handler
+                    on:mouseleave=canvas_mouseleave_handler
+                />
+                <div
+                    node_ref=crosshair_ref
+                    style="
+                        position: absolute;
+                        top: 0;
+                        display: none;
+                        width: 0;
+                        border-left: 1px dashed #9ca3af;
+                        pointer-events: none;
+                    "
                 />
                 <div
                     node_ref=tooltip_ref
@@ -319,6 +399,7 @@ pub fn CandlestickChart(
                         font-size: 13px;
                         pointer-events: none;
                         line-height: 1.6;
+                        white-space: nowrap;
                     "
                 />
             </div>
