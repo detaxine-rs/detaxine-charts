@@ -1,3 +1,4 @@
+use crate::utils::number_format::{format_int_with_commas, format_short_number, nice_ceiling};
 use leptos::{
     ev,
     html::{Canvas, Div},
@@ -37,11 +38,11 @@ impl BarChartConfig {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DataPoint {
     pub name: String,
-    pub value: i32,
+    pub value: i64,
 }
 
 impl DataPoint {
-    pub fn new(name: &str, value: i32) -> Self {
+    pub fn new(name: &str, value: i64) -> Self {
         Self {
             name: name.into(),
             value,
@@ -56,7 +57,7 @@ struct BarRect {
     width: f64,
     height: f64,
     label: String,
-    value: i32,
+    value: i64,
 }
 
 fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
@@ -155,10 +156,27 @@ pub fn BarChart(
         let tooltip_el: HtmlElement = tooltip.into();
         let style = tooltip_el.style();
         if let Some(bar) = hovered {
+            tooltip_el.set_inner_text(&format!(
+                "{}: {}",
+                bar.label,
+                format_int_with_commas(bar.value)
+            ));
             let _ = style.set_property("display", "block");
-            let _ = style.set_property("left", &format!("{}px", x + 10.0));
+
+            // measure after content is set so offset_width reflects the new content
+            let tooltip_width = tooltip_el.offset_width() as f64;
+            let canvas_width = canvas.client_width() as f64;
+            let gap = 10.0;
+
+            let left = if x + gap + tooltip_width > canvas_width {
+                // flip to the left side of the cursor
+                (x - gap - tooltip_width).max(0.0)
+            } else {
+                x + gap
+            };
+
+            let _ = style.set_property("left", &format!("{}px", left));
             let _ = style.set_property("top", &format!("{}px", y - 28.0));
-            tooltip_el.set_inner_text(&format!("{}: {}", bar.label, bar.value));
         } else {
             let _ = style.set_property("display", "none");
         }
@@ -217,7 +235,8 @@ fn draw_bar_chart(
     let Some(max_raw) = data.iter().map(|p| p.value).max() else {
         return vec![];
     };
-    let max_value = max_raw as f64 * 1.2;
+    // TODO: I might allow users to customize normalization(1.0 might be default)
+    let max_value = nice_ceiling(max_raw as f64 * 1.0);
     let num_grid_lines = 5;
     let step_value = max_value / num_grid_lines as f64;
     let step_height = (height - axis_padding * 2.0) / num_grid_lines as f64;
@@ -234,8 +253,8 @@ fn draw_bar_chart(
         context.move_to(axis_padding, y);
         context.line_to(width, y);
         context.stroke();
-        let label = (i as f64 * step_value).round();
-        let _ = context.fill_text(&format!("{}", label), axis_padding - 10.0, y);
+        let label = i as f64 * step_value;
+        let _ = context.fill_text(&format_short_number(label), axis_padding - 10.0, y);
     }
 
     let mut bar_rects = Vec::new();

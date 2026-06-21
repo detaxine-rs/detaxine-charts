@@ -8,6 +8,8 @@ use web_sys::{
     CanvasRenderingContext2d, HtmlCanvasElement, HtmlElement, wasm_bindgen::JsCast, window,
 };
 
+use crate::utils::number_format::format_int_with_commas;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PieChartConfig {
     pub show_legend: bool,
@@ -22,12 +24,12 @@ impl Default for PieChartConfig {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DataPoint {
     pub name: String,
-    pub value: i32,
+    pub value: i64,
     pub color: String,
 }
 
 impl DataPoint {
-    pub fn new(name: &str, value: i32, color: &str) -> Self {
+    pub fn new(name: &str, value: i64, color: &str) -> Self {
         Self {
             name: name.into(),
             value,
@@ -44,7 +46,7 @@ struct SlicePos {
     center_x: f64,
     center_y: f64,
     name: String,
-    value: i32,
+    value: i64,
 }
 
 fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
@@ -165,9 +167,27 @@ pub fn PieChart(
         let style = tooltip_el.style();
         if let Some(slice) = hovered {
             let _ = style.set_property("display", "block");
-            let _ = style.set_property("left", &format!("{}px", x + 10.0));
+
+            tooltip_el.set_inner_text(&format!(
+                "{}: {}",
+                slice.name,
+                format_int_with_commas(slice.value)
+            ));
+
+            // measure after content is set so offset_width reflects the new content
+            let tooltip_width = tooltip_el.offset_width() as f64;
+            let canvas_width = canvas.client_width() as f64;
+            let gap = 10.0;
+
+            let left = if x + gap + tooltip_width > canvas_width {
+                // flip to the left side of the cursor
+                (x - gap - tooltip_width).max(0.0)
+            } else {
+                x + gap
+            };
+
+            let _ = style.set_property("left", &format!("{}px", left));
             let _ = style.set_property("top", &format!("{}px", y - 28.0));
-            tooltip_el.set_inner_text(&format!("{}: {}", slice.name, slice.value));
         } else {
             let _ = style.set_property("display", "none");
         }

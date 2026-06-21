@@ -8,6 +8,8 @@ use web_sys::{
     CanvasRenderingContext2d, HtmlCanvasElement, HtmlElement, wasm_bindgen::JsCast, window,
 };
 
+use crate::utils::number_format::format_int_with_commas;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DoughnutChartConfig {
     pub show_legend: bool,
@@ -27,7 +29,7 @@ struct SegmentPos {
     center_x: f64,
     center_y: f64,
     label: String,
-    value: i32,
+    value: i64,
     color: String,
 }
 
@@ -44,7 +46,7 @@ pub fn DoughnutChart(
     /// Accepts a reactive signal — update data and the chart redraws automatically.
     /// Each tuple is (label, value, color).
     #[prop(into)]
-    data: MaybeProp<Vec<(String, i32, String)>>,
+    data: MaybeProp<Vec<(String, i64, String)>>,
     #[prop(optional, default = Default::default())] config: DoughnutChartConfig,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
@@ -151,9 +153,26 @@ pub fn DoughnutChart(
         let style = tooltip_el.style();
         if let Some(seg) = hovered {
             let _ = style.set_property("display", "block");
-            let _ = style.set_property("left", &format!("{}px", x + 10.0));
+            tooltip_el.set_inner_text(&format!(
+                "{}: {}",
+                seg.label,
+                format_int_with_commas(seg.value)
+            ));
+
+            // measure after content is set so offset_width reflects the new content
+            let tooltip_width = tooltip_el.offset_width() as f64;
+            let canvas_width = canvas.client_width() as f64;
+            let gap = 10.0;
+
+            let left = if x + gap + tooltip_width > canvas_width {
+                // flip to the left side of the cursor
+                (x - gap - tooltip_width).max(0.0)
+            } else {
+                x + gap
+            };
+
+            let _ = style.set_property("left", &format!("{}px", left));
             let _ = style.set_property("top", &format!("{}px", y - 28.0));
-            tooltip_el.set_inner_text(&format!("{}: {}", seg.label, seg.value));
         } else {
             let _ = style.set_property("display", "none");
         }
@@ -203,7 +222,7 @@ fn draw_doughnut_chart(
     context: &CanvasRenderingContext2d,
     width: f64,
     height: f64,
-    data: &[(String, i32, String)],
+    data: &[(String, i64, String)],
 ) -> Vec<SegmentPos> {
     let center_x = width / 2.0;
     let center_y = height / 2.0;

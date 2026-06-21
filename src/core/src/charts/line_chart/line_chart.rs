@@ -7,6 +7,8 @@ use web_sys::{
     CanvasRenderingContext2d, HtmlCanvasElement, HtmlElement, wasm_bindgen::JsCast, window,
 };
 
+use crate::utils::number_format::{format_int_with_commas, format_short_number, nice_ceiling};
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LineCurveChartConfig {
     pub show_grid: bool,
@@ -42,11 +44,11 @@ impl Default for LineCurveChartConfig {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DataPoint {
-    pub y: i32,
+    pub y: i64,
 }
 
 impl DataPoint {
-    pub fn new(y: i32) -> Self {
+    pub fn new(y: i64) -> Self {
         Self { y }
     }
 }
@@ -71,7 +73,7 @@ struct PointPos {
     x: f64,
     y: f64,
     label: String,
-    value: i32,
+    value: i64,
     series_name: String,
     series_color: String,
 }
@@ -90,11 +92,12 @@ pub fn LineCurveChart(
     #[prop(into)]
     data: MaybeProp<Vec<(Series, Vec<DataPoint>)>>,
     /// Reactive signal — update x labels and the chart redraws automatically.
-    x: Signal<Vec<String>>,
+    x: MaybeProp<Vec<String>>,
     #[prop(optional, default = Default::default())] config: LineCurveChartConfig,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
     let tooltip_ref = NodeRef::<Div>::new();
+    let crosshair_ref = NodeRef::<Div>::new();
     let point_positions = StoredValue::new(Vec::<PointPos>::new());
     let config = StoredValue::new(config);
 
@@ -147,7 +150,7 @@ pub fn LineCurveChart(
             width,
             height,
             &data,
-            &x.get_untracked(),
+            &x.get_untracked().unwrap_or_default(),
             &config.get_value(),
         );
         point_positions.set_value(positions);
@@ -172,6 +175,9 @@ pub fn LineCurveChart(
         let Some(tooltip) = tooltip_ref.get() else {
             return;
         };
+        let Some(crosshair) = crosshair_ref.get() else {
+            return;
+        };
         let Some(win) = window() else { return };
 
         let rect = canvas.get_bounding_client_rect();
@@ -180,29 +186,97 @@ pub fn LineCurveChart(
 
         let device_pixel_ratio = win.device_pixel_ratio();
         let scale_x = canvas.client_width() as f64 / canvas.width() as f64 * device_pixel_ratio;
-        let scale_y = canvas.client_height() as f64 / canvas.height() as f64 * device_pixel_ratio;
         let lx = x * scale_x;
-        let ly = y * scale_y;
 
-        let hit_radius = 8.0;
-        let hovered = point_positions.get_value().into_iter().find(|p| {
-            let dx = lx - p.x;
-            let dy = ly - p.y;
-            (dx * dx + dy * dy).sqrt() <= hit_radius
-        });
+        let positions = point_positions.get_value();
 
         let tooltip_el: HtmlElement = tooltip.into();
-        let style = tooltip_el.style();
-        if let Some(point) = hovered {
-            let _ = style.set_property("display", "block");
-            let _ = style.set_property("left", &format!("{}px", x + 10.0));
-            let _ = style.set_property("top", &format!("{}px", y - 28.0));
-            tooltip_el.set_inner_text(&format!(
-                "{} — {}: {}",
-                point.series_name, point.label, point.value
+        let crosshair_el: HtmlElement = crosshair.into();
+        let tooltip_style = tooltip_el.style();
+        let crosshair_style = crosshair_el.style();
+
+        let Some(first) = positions.first() else {
+            let _ = tooltip_style.set_property("display", "none");
+            let _ = crosshair_style.set_property("display", "none");
+            return;
+        };
+
+        // points sharing the same x-index land on the same x coordinate
+        // across series, so the closest x identifies the hovered index
+        let mut closest_x = first.x;
+        let mut min_dist = (closest_x - lx).abs();
+        for p in &positions {
+            let d = (p.x - lx).abs();
+            if d < min_dist {
+                min_dist = d;
+                closest_x = p.x;
+            }
+        }
+
+        // hide everything once the cursor strays too far from any index,
+        // e.g. over the y-axis labels or outside the plotted area
+        let hit_threshold = 40.0;
+        if min_dist > hit_threshold {
+            let _ = tooltip_style.set_property("display", "none");
+            let _ = crosshair_style.set_property("display", "none");
+            return;
+        }
+
+        let epsilon = 0.5;
+        let matched: Vec<_> = positions
+            .iter()
+            .filter(|p| (p.x - closest_x).abs() < epsilon)
+            .collect();
+
+        let Some(label_point) = matched.first() else {
+            let _ = tooltip_style.set_property("display", "none");
+            let _ = crosshair_style.set_property("display", "none");
+            return;
+        };
+
+        // crosshair — a dashed vertical line spanning the canvas height
+        let _ = crosshair_style.set_property("display", "block");
+        let _ = crosshair_style.set_property("left", &format!("{}px", closest_x));
+        let _ = crosshair_style.set_property("height", &format!("{}px", canvas.client_height()));
+
+        // combined tooltip — one line per series at this index
+        let mut html = format!("<strong>{}</strong>", label_point.label);
+        for p in &matched {
+            html.push_str(&format!(
+                "<br/><span style=\"color:{}\">●</span> {}: {}",
+                p.series_color,
+                p.series_name,
+                format_int_with_commas(p.value)
             ));
+        }
+
+        let _ = tooltip_style.set_property("display", "block");
+        tooltip_el.set_inner_html(&html);
+
+        // measure after content is set so offset_width reflects the new content
+        let tooltip_width = tooltip_el.offset_width() as f64;
+        let canvas_width = canvas.client_width() as f64;
+        let gap = 12.0;
+
+        let left = if closest_x + gap + tooltip_width > canvas_width {
+            // flip to the left side of the crosshair
+            (closest_x - gap - tooltip_width).max(0.0)
         } else {
-            let _ = style.set_property("display", "none");
+            closest_x + gap
+        };
+
+        let _ = tooltip_style.set_property("left", &format!("{}px", left));
+        let _ = tooltip_style.set_property("top", &format!("{}px", y - 10.0));
+    };
+
+    let canvas_mouseleave_handler = move |_: ev::MouseEvent| {
+        if let Some(tooltip) = tooltip_ref.get() {
+            let tooltip_el: HtmlElement = tooltip.into();
+            let _ = tooltip_el.style().set_property("display", "none");
+        }
+        if let Some(crosshair) = crosshair_ref.get() {
+            let crosshair_el: HtmlElement = crosshair.into();
+            let _ = crosshair_el.style().set_property("display", "none");
         }
     };
 
@@ -227,7 +301,19 @@ pub fn LineCurveChart(
                     node_ref=canvas_ref
                     style="width: 100%; height: 100%;"
                     on:mousemove=canvas_mousemove_handler
+                    on:mouseleave=canvas_mouseleave_handler
                 ></canvas>
+                <div
+                    node_ref=crosshair_ref
+                    style="
+                        position: absolute;
+                        top: 0;
+                        display: none;
+                        width: 0;
+                        border-left: 1px dashed #9ca3af;
+                        pointer-events: none;
+                    "
+                />
                 <div
                     node_ref=tooltip_ref
                     style="
@@ -238,7 +324,9 @@ pub fn LineCurveChart(
                         padding: 4px 8px;
                         border-radius: 4px;
                         font-size: 13px;
+                        line-height: 1.6;
                         pointer-events: none;
+                        white-space: nowrap;
                     "
                 />
             </div>
@@ -256,12 +344,15 @@ fn draw_multiline_chart(
 ) -> Vec<PointPos> {
     let axis_padding = 50.0;
 
-    let max_value = data
+    let Some(max_raw) = data
         .iter()
         .flat_map(|(_, points)| points.iter().map(|d| d.y))
         .max()
-        .unwrap_or(0) as f64
-        * 1.2;
+    else {
+        return vec![];
+    };
+    // TODO: I might allow users to customize normalization(1.0 might be default)
+    let max_value = nice_ceiling(max_raw as f64 * 1.0);
 
     let Some(first) = data.first() else {
         return vec![];
@@ -314,7 +405,7 @@ fn draw_multiline_chart(
 
         if config.show_y_axis_labels {
             let label = (i as f64 * step_value).round();
-            let _ = context.fill_text(&format!("{}", label), axis_padding - 10.0, y);
+            let _ = context.fill_text(&format_short_number(label), axis_padding - 10.0, y);
         }
     }
 
