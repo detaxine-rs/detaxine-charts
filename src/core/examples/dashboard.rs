@@ -290,7 +290,7 @@ pub fn App() -> impl IntoView {
                             <div class="chart-container">
                                 <LineCurveChart
                                     data=metrics.signal()
-                                    x=x_labels.into()
+                                    x=x_labels
                                     config=LineCurveChartConfig {
                                         show_area_chart: true,
                                         x_axis_title: "Day".to_string(),

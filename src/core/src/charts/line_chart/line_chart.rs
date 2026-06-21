@@ -92,6 +92,7 @@ pub fn LineCurveChart(
     #[prop(into)]
     data: MaybeProp<Vec<(Series, Vec<DataPoint>)>>,
     /// Reactive signal — update x labels and the chart redraws automatically.
+    #[prop(into)]
     x: MaybeProp<Vec<String>>,
     #[prop(optional, default = Default::default())] config: LineCurveChartConfig,
 ) -> impl IntoView {
