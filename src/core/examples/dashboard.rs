@@ -152,6 +152,7 @@ pub fn App() -> impl IntoView {
     let progress_gauge_ref: NodeRef<Div> = NodeRef::new();
     let zone_gauge_ref: NodeRef<Div> = NodeRef::new();
     let polar_area_ref: NodeRef<Div> = NodeRef::new();
+    let radar_ref: NodeRef<Div> = NodeRef::new();
 
     let drawer_open = RwSignal::new(false);
 
@@ -213,6 +214,7 @@ pub fn App() -> impl IntoView {
         ("Gauge Chart - Progress", progress_gauge_ref),
         ("Gauge Chart - Zones", zone_gauge_ref),
         ("Polar Area Chart", polar_area_ref),
+        ("Radar Chart", radar_ref),
     ];
 
     view! {
@@ -291,7 +293,7 @@ pub fn App() -> impl IntoView {
 
                         <div class="card" node_ref=bar_ref>
                             <div class="section-header">
-                                <h2 class="section-title">"Bar Chart — Volume"</h2>
+                                <h2 class="section-title">"Bar Chart - Volume"</h2>
                             </div>
                             <div class="chart-container">
                                 <BarChart data=volume.signal() config=BarChartConfig::new("#6366f1", "#e5e7eb", "#111827") />
@@ -300,7 +302,7 @@ pub fn App() -> impl IntoView {
 
                         <div class="card" node_ref=line_ref>
                             <div class="section-header">
-                                <h2 class="section-title">"Line Chart — Revenue vs Expenses"</h2>
+                                <h2 class="section-title">"Line Chart - Revenue vs Expenses"</h2>
                             </div>
                             <div class="chart-container">
                                 <LineCurveChart
@@ -318,7 +320,7 @@ pub fn App() -> impl IntoView {
 
                         <div class="card" node_ref=pie_ref>
                             <div class="section-header">
-                                <h2 class="section-title">"Pie Chart — Portfolio Allocation"</h2>
+                                <h2 class="section-title">"Pie Chart - Portfolio Allocation"</h2>
                             </div>
                             <div class="chart-container">
                                 <PieChart data=allocation.signal() config=PieChartConfig { show_legend: true } />
@@ -327,7 +329,7 @@ pub fn App() -> impl IntoView {
 
                         <div class="card" node_ref=doughnut_ref>
                             <div class="section-header">
-                                <h2 class="section-title">"Doughnut Chart — Sector Exposure"</h2>
+                                <h2 class="section-title">"Doughnut Chart - Sector Exposure"</h2>
                             </div>
                             <div class="chart-container">
                                 <DoughnutChart data=exposure.signal() config=DoughnutChartConfig { show_legend: true } />
@@ -393,7 +395,7 @@ pub fn App() -> impl IntoView {
                             </div>
                         </div>
 
-                        <div class="card" node_ref=polar_area_ref>
+                        <div class="card" node_ref=radar_ref>
                             <div class="section-header">
                                 <h2 class="section-title">"Radar Chart"</h2>
                             </div>
