@@ -3,6 +3,7 @@ use std::time::Duration;
 use detaxine_charts::{
     bar_chart::{BarChart, BarChartConfig, DataPoint as BarPoint},
     candlestick_chart::{Candle, CandlestickChart, CandlestickChartConfig},
+    charts::gauge_chart::gauge_chart::{GaugeChart, GaugeChartConfig, GaugeZone},
     doughnut_chart::{DoughnutChart, DoughnutChartConfig},
     line_chart::{DataPoint as LinePoint, LineCurveChart, LineCurveChartConfig, Series},
     pie_chart::{DataPoint as PiePoint, PieChart, PieChartConfig},
@@ -140,6 +141,8 @@ pub fn App() -> impl IntoView {
     let line_ref: NodeRef<Div> = NodeRef::new();
     let pie_ref: NodeRef<Div> = NodeRef::new();
     let doughnut_ref: NodeRef<Div> = NodeRef::new();
+    let progress_gauge_ref: NodeRef<Div> = NodeRef::new();
+    let zone_gauge_ref: NodeRef<Div> = NodeRef::new();
 
     let drawer_open = RwSignal::new(false);
 
@@ -198,6 +201,8 @@ pub fn App() -> impl IntoView {
         ("Line Chart", line_ref),
         ("Pie Chart", pie_ref),
         ("Doughnut Chart", doughnut_ref),
+        ("Gauge Chart - Progress", progress_gauge_ref),
+        ("Gauge Chart - Zones", zone_gauge_ref),
     ];
 
     view! {
@@ -316,6 +321,47 @@ pub fn App() -> impl IntoView {
                             </div>
                             <div class="chart-container">
                                 <DoughnutChart data=exposure.signal() config=DoughnutChartConfig { show_legend: true } />
+                            </div>
+                        </div>
+
+                        <div class="card" node_ref=progress_gauge_ref>
+                            <div class="section-header">
+                                <h2 class="section-title">"Gauge Chart - Progress Style"</h2>
+                            </div>
+                            <div class="chart-container">
+                                <GaugeChart
+                                    value=Signal::derive(move || 72.0)
+                                    config=GaugeChartConfig {
+                                        min: 0.0,
+                                        max: 100.0,
+                                        label: "Battery".to_string(),
+                                        unit: "%".to_string(),
+                                        ..Default::default()
+                                    }
+                                />
+                            </div>
+                        </div>
+
+                        <div class="card" node_ref=zone_gauge_ref>
+                            <div class="section-header">
+                                <h2 class="section-title">"Gauge Chart - Zone Style"</h2>
+                            </div>
+                            <div class="chart-container">
+                                <GaugeChart
+                                    value=Signal::derive(move || 800.0)
+                                    config=GaugeChartConfig {
+                                        min: 300.0,
+                                        max: 850.0,
+                                        zones: vec![
+                                            GaugeZone::new(300.0, 579.0, "#e11d48", "VERY POOR"),
+                                            GaugeZone::new(579.0, 669.0, "#d97706", "POOR"),
+                                            GaugeZone::new(669.0, 739.0, "#eab308", "FAIR"),
+                                            GaugeZone::new(739.0, 799.0, "#84cc16", "GOOD"),
+                                            GaugeZone::new(799.0, 850.0, "#16a34a", "EXCELLENT"),
+                                        ],
+                                        ..Default::default()
+                                    }
+                                />
                             </div>
                         </div>
 

@@ -13,3 +13,6 @@ pub mod line_chart {
 pub mod pie_chart {
     pub mod pie_chart;
 }
+pub mod gauge_chart {
+    pub mod gauge_chart;
+}
