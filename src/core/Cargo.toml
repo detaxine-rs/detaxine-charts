@@ -1,6 +1,6 @@
 [package]
 name = "detaxine-charts"
-version = "0.8.28"
+version = "0.8.29"
 edition = "2024"
 description = "A data visualization library for Leptos"
 license = "MIT OR Apache-2.0"

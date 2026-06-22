@@ -343,7 +343,11 @@ fn draw_multiline_chart(
     x_labels: &[String],
     config: &LineCurveChartConfig,
 ) -> Vec<PointPos> {
-    let axis_padding = 50.0;
+    let axis_padding = (height * 0.12).clamp(28.0, 50.0);
+    let left_padding = (width * 0.12).clamp(35.0, 50.0);
+    let y_label_font_size = (height * 0.045).clamp(9.0, 12.0);
+    let x_label_font_size = (height * 0.04).clamp(8.0, 11.0);
+    let title_font_size = (height * 0.045).clamp(10.0, 13.0);
 
     let Some(max_raw) = data
         .iter()
@@ -362,7 +366,8 @@ fn draw_multiline_chart(
     if num_points < 2.0 {
         return vec![];
     };
-    let point_spacing = (width - axis_padding * 2.0) / (num_points - 1.0);
+    let available_height = height - axis_padding * 2.0;
+    let point_spacing = (width - left_padding - axis_padding) / (num_points - 1.0);
 
     context.clear_rect(0.0, 0.0, width, height);
 
@@ -370,7 +375,7 @@ fn draw_multiline_chart(
         context.set_stroke_style_str("#cccccc");
         context.set_line_width(1.0);
         context.begin_path();
-        context.move_to(axis_padding, height - axis_padding);
+        context.move_to(left_padding, height - axis_padding);
         context.line_to(width, height - axis_padding);
         context.stroke();
     }
@@ -379,34 +384,35 @@ fn draw_multiline_chart(
         context.set_stroke_style_str("#cccccc");
         context.set_line_width(1.0);
         context.begin_path();
-        context.move_to(axis_padding, 0.0);
-        context.line_to(axis_padding, height - axis_padding);
+        context.move_to(left_padding, 0.0);
+        context.line_to(left_padding, height - axis_padding);
         context.stroke();
     }
 
     let num_grid_lines = 5;
     let step_value = max_value / num_grid_lines as f64;
-    let step_height = (height - axis_padding * 2.0) / num_grid_lines as f64;
+    let step_height = available_height / num_grid_lines as f64;
 
     context.set_stroke_style_str("#cccccc");
     context.set_line_width(1.0);
     context.set_fill_style_str("black");
     context.set_text_align("right");
     context.set_text_baseline("middle");
+    context.set_font(&format!("{}px Arial", y_label_font_size));
 
     for i in 0..=num_grid_lines {
         let y = height - axis_padding - i as f64 * step_height;
 
         if config.show_grid {
             context.begin_path();
-            context.move_to(axis_padding, y);
+            context.move_to(left_padding, y);
             context.line_to(width, y);
             context.stroke();
         }
 
         if config.show_y_axis_labels {
             let label = (i as f64 * step_value).round();
-            let _ = context.fill_text(&format_short_number(label), axis_padding - 10.0, y);
+            let _ = context.fill_text(&format_short_number(label), left_padding - 10.0, y);
         }
     }
 
@@ -417,21 +423,16 @@ fn draw_multiline_chart(
         context.set_line_width(config.stroke_width);
 
         context.begin_path();
-        let first_y = height
-            - axis_padding
-            - (points[0].y as f64 / max_value) * (height - axis_padding * 2.0);
-        context.move_to(axis_padding, first_y);
+        let first_y = height - axis_padding - (points[0].y as f64 / max_value) * available_height;
+        context.move_to(left_padding, first_y);
 
         for i in 1..points.len() {
-            let x = axis_padding + i as f64 * point_spacing;
-            let y = height
-                - axis_padding
-                - (points[i].y as f64 / max_value) * (height - axis_padding * 2.0);
+            let x = left_padding + i as f64 * point_spacing;
+            let y = height - axis_padding - (points[i].y as f64 / max_value) * available_height;
 
-            let prev_x = axis_padding + (i - 1) as f64 * point_spacing;
-            let prev_y = height
-                - axis_padding
-                - (points[i - 1].y as f64 / max_value) * (height - axis_padding * 2.0);
+            let prev_x = left_padding + (i - 1) as f64 * point_spacing;
+            let prev_y =
+                height - axis_padding - (points[i - 1].y as f64 / max_value) * available_height;
 
             let ctrl1_x = prev_x + point_spacing / 3.0;
             let ctrl1_y = prev_y;
@@ -444,10 +445,10 @@ fn draw_multiline_chart(
 
         if config.show_area_chart {
             context.line_to(
-                axis_padding + (points.len() as f64 - 1.0) * point_spacing,
+                left_padding + (points.len() as f64 - 1.0) * point_spacing,
                 height - axis_padding,
             );
-            context.line_to(axis_padding, height - axis_padding);
+            context.line_to(left_padding, height - axis_padding);
             context.close_path();
             let fill_color = format!("{}33", &series.color);
             context.set_fill_style_str(&fill_color);
@@ -455,10 +456,8 @@ fn draw_multiline_chart(
         }
 
         for (i, datapoint) in points.iter().enumerate() {
-            let x = axis_padding + i as f64 * point_spacing;
-            let y = height
-                - axis_padding
-                - (datapoint.y as f64 / max_value) * (height - axis_padding * 2.0);
+            let x = left_padding + i as f64 * point_spacing;
+            let y = height - axis_padding - (datapoint.y as f64 / max_value) * available_height;
 
             if config.show_inflection_points {
                 context.set_fill_style_str(series.color.as_str());
@@ -482,8 +481,9 @@ fn draw_multiline_chart(
         context.set_fill_style_str("black");
         context.set_text_align("right");
         context.set_text_baseline("middle");
+        context.set_font(&format!("{}px Arial", x_label_font_size));
         for (i, x_label) in x_labels.iter().enumerate() {
-            let x = axis_padding + i as f64 * point_spacing;
+            let x = left_padding + i as f64 * point_spacing;
             let y = height - axis_padding / 2.0;
             context.save();
             let _ = context.translate(x, y);
@@ -495,10 +495,10 @@ fn draw_multiline_chart(
 
     if !config.x_axis_title.is_empty() {
         context.set_text_align("center");
-        context.set_font("bold 12px Arial");
+        context.set_font(&format!("bold {}px Arial", title_font_size));
         let _ = context.fill_text(
             &config.x_axis_title,
-            width / 2.0,
+            (left_padding + width) / 2.0,
             height - axis_padding / 4.0,
         );
     }
@@ -506,10 +506,10 @@ fn draw_multiline_chart(
     if !config.y_axis_title.is_empty() {
         context.set_text_align("center");
         context.set_text_baseline("middle");
-        context.set_font("bold 12px Arial");
+        context.set_font(&format!("bold {}px Arial", title_font_size));
         context.save();
         let _ = context.rotate(-std::f64::consts::PI / 2.0);
-        let _ = context.fill_text(&config.y_axis_title, -(height / 2.0), axis_padding / 4.0);
+        let _ = context.fill_text(&config.y_axis_title, -(height / 2.0), left_padding / 4.0);
         context.restore();
     }
 

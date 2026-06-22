@@ -223,47 +223,47 @@ fn draw_bar_chart(
         return vec![];
     };
 
-    let axis_padding = 50.0;
+    let axis_padding = (height * 0.12).clamp(28.0, 50.0);
+    let left_padding = (width * 0.12).clamp(35.0, 50.0);
+    let y_label_font_size = (height * 0.045).clamp(9.0, 12.0);
+    let x_label_font_size = (height * 0.04).clamp(8.0, 11.0);
+
     let bar_padding = 0.3;
     let num_bars = data.len() as f64;
-    let slot_width = (width - axis_padding) / num_bars;
+    let slot_width = (width - left_padding) / num_bars;
     let bar_width = slot_width * (1.0 - bar_padding);
     let bar_spacing = slot_width * bar_padding;
-
     context.clear_rect(0.0, 0.0, width, height);
-
     let Some(max_raw) = data.iter().map(|p| p.value).max() else {
         return vec![];
     };
-    // TODO: I might allow users to customize normalization(1.0 might be default)
     let max_value = nice_ceiling(max_raw as f64 * 1.0);
+
+    let available_height = height - axis_padding * 2.0;
     let num_grid_lines = 5;
     let step_value = max_value / num_grid_lines as f64;
-    let step_height = (height - axis_padding * 2.0) / num_grid_lines as f64;
+    let step_height = available_height / num_grid_lines as f64;
 
     context.set_stroke_style_str("#cccccc");
     context.set_line_width(1.0);
     context.set_fill_style_str("black");
     context.set_text_align("right");
     context.set_text_baseline("middle");
-
+    context.set_font(&format!("{}px Arial", y_label_font_size));
     for i in 0..=num_grid_lines {
         let y = height - axis_padding - i as f64 * step_height;
         context.begin_path();
-        context.move_to(axis_padding, y);
+        context.move_to(left_padding, y);
         context.line_to(width, y);
         context.stroke();
         let label = i as f64 * step_value;
-        let _ = context.fill_text(&format_short_number(label), axis_padding - 10.0, y);
+        let _ = context.fill_text(&format_short_number(label), left_padding - 10.0, y);
     }
-
     let mut bar_rects = Vec::new();
     context.set_fill_style_str(config.bar_color.as_str());
     for (i, point) in data.iter().enumerate() {
-        let x = axis_padding + i as f64 * slot_width + bar_spacing / 2.0;
-        let y = height
-            - axis_padding
-            - point.value as f64 * ((height - axis_padding * 2.0) / max_value);
+        let x = left_padding + i as f64 * slot_width + bar_spacing / 2.0;
+        let y = height - axis_padding - point.value as f64 * (available_height / max_value);
         let bar_height = height - axis_padding - y;
         context.fill_rect(x, y, bar_width, bar_height);
         bar_rects.push(BarRect {
@@ -275,12 +275,12 @@ fn draw_bar_chart(
             value: point.value,
         });
     }
-
     context.set_fill_style_str("black");
     context.set_text_align("right");
     context.set_text_baseline("middle");
+    context.set_font(&format!("{}px Arial", x_label_font_size));
     for (i, point) in data.iter().enumerate() {
-        let x = axis_padding + i as f64 * slot_width + slot_width / 2.0;
+        let x = left_padding + i as f64 * slot_width + slot_width / 2.0;
         let y = height - axis_padding / 2.0;
         context.save();
         let _ = context.translate(x, y);
@@ -288,7 +288,6 @@ fn draw_bar_chart(
         let _ = context.fill_text(&point.name, 0.0, 0.0);
         context.restore();
     }
-
     bar_rects
 }
 
