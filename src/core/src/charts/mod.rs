@@ -16,3 +16,9 @@ pub mod pie_chart {
 pub mod gauge_chart {
     pub mod gauge_chart;
 }
+pub mod polar_area_chart {
+    pub mod polar_area_chart;
+}
+pub mod radar_chart {
+    pub mod radar_chart;
+}

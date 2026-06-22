@@ -436,7 +436,11 @@ fn draw_candlestick_chart(
         return vec![];
     };
 
-    let axis_padding = 60.0;
+    let axis_padding = (height * 0.12).clamp(28.0, 60.0);
+    let left_padding = (width * 0.1).clamp(40.0, 60.0);
+    let y_label_font_size = (height * 0.045).clamp(9.0, 12.0);
+    let x_label_font_size = (height * 0.04).clamp(8.0, 11.0);
+
     let candle_margin = 0.2;
 
     let max_value = data
@@ -451,7 +455,7 @@ fn draw_candlestick_chart(
         return vec![];
     };
 
-    let chart_width = width - axis_padding * 2.0;
+    let chart_width = width - left_padding - axis_padding;
     let chart_height = height - axis_padding * 2.0;
     let slot_width = chart_width / data.len() as f64;
     let candle_width = (slot_width * (1.0 - candle_margin)).max(0.5);
@@ -470,6 +474,7 @@ fn draw_candlestick_chart(
     context.set_fill_style_str("black");
     context.set_text_align("right");
     context.set_text_baseline("middle");
+    context.set_font(&format!("{}px Arial", y_label_font_size));
 
     for i in 0..=num_grid_lines {
         let y = height - axis_padding - i as f64 * step_height;
@@ -478,24 +483,24 @@ fn draw_candlestick_chart(
         if config.show_grid {
             context.set_stroke_style_str("#e5e7eb");
             context.begin_path();
-            context.move_to(axis_padding, y);
+            context.move_to(left_padding, y);
             context.line_to(width - axis_padding, y);
             context.stroke();
         }
 
-        let _ = context.fill_text(&format!("{:.2}", label), axis_padding - 8.0, y);
+        let _ = context.fill_text(&format!("{:.2}", label), left_padding - 8.0, y);
     }
 
     context.set_stroke_style_str("#e5e7eb");
     context.begin_path();
-    context.move_to(axis_padding, height - axis_padding);
+    context.move_to(left_padding, height - axis_padding);
     context.line_to(width - axis_padding, height - axis_padding);
     context.stroke();
 
     let mut candle_positions = Vec::new();
 
     for (i, candle) in data.iter().enumerate() {
-        let slot_x = axis_padding + i as f64 * slot_width;
+        let slot_x = left_padding + i as f64 * slot_width;
         let candle_x = slot_x + (slot_width - candle_width) / 2.0;
         let wick_x = candle_x + candle_width / 2.0;
 
@@ -541,6 +546,7 @@ fn draw_candlestick_chart(
             context.set_fill_style_str("black");
             context.set_text_align("right");
             context.set_text_baseline("middle");
+            context.set_font(&format!("{}px Arial", x_label_font_size));
             context.save();
             let _ = context.translate(wick_x, height - axis_padding / 2.0);
             let _ = context.rotate(-std::f64::consts::PI / 4.0);

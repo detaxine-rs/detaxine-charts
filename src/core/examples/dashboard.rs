@@ -3,9 +3,17 @@ use std::time::Duration;
 use detaxine_charts::{
     bar_chart::{BarChart, BarChartConfig, DataPoint as BarPoint},
     candlestick_chart::{Candle, CandlestickChart, CandlestickChartConfig},
-    charts::gauge_chart::gauge_chart::{GaugeChart, GaugeChartConfig, GaugeZone},
+    charts::{
+        gauge_chart::gauge_chart::{GaugeChart, GaugeChartConfig, GaugeZone},
+        polar_area_chart::polar_area_chart::{
+            DataPoint as PolarPoint, PolarAreaChart, PolarAreaChartConfig,
+        },
+        radar_chart::radar_chart::{RadarChart, RadarChartConfig, Series as RadarSeries},
+    },
     doughnut_chart::{DoughnutChart, DoughnutChartConfig},
-    line_chart::{DataPoint as LinePoint, LineCurveChart, LineCurveChartConfig, Series},
+    line_chart::{
+        DataPoint as LinePoint, LineCurveChart, LineCurveChartConfig, Series as LineSeries,
+    },
     pie_chart::{DataPoint as PiePoint, PieChart, PieChartConfig},
     use_chart_data,
 };
@@ -70,10 +78,10 @@ fn initial_volume() -> Vec<BarPoint> {
     ]
 }
 
-fn initial_metrics() -> Vec<(Series, Vec<LinePoint>)> {
+fn initial_metrics() -> Vec<(LineSeries, Vec<LinePoint>)> {
     vec![
         (
-            Series::new("Revenue", "#4f46e5"),
+            LineSeries::new("Revenue", "#4f46e5"),
             vec![
                 LinePoint::new(142_000),
                 LinePoint::new(158_000),
@@ -85,7 +93,7 @@ fn initial_metrics() -> Vec<(Series, Vec<LinePoint>)> {
             ],
         ),
         (
-            Series::new("Expenses", "#e11d48"),
+            LineSeries::new("Expenses", "#e11d48"),
             vec![
                 LinePoint::new(98_000),
                 LinePoint::new(104_000),
@@ -143,6 +151,7 @@ pub fn App() -> impl IntoView {
     let doughnut_ref: NodeRef<Div> = NodeRef::new();
     let progress_gauge_ref: NodeRef<Div> = NodeRef::new();
     let zone_gauge_ref: NodeRef<Div> = NodeRef::new();
+    let polar_area_ref: NodeRef<Div> = NodeRef::new();
 
     let drawer_open = RwSignal::new(false);
 
@@ -203,6 +212,7 @@ pub fn App() -> impl IntoView {
         ("Doughnut Chart", doughnut_ref),
         ("Gauge Chart - Progress", progress_gauge_ref),
         ("Gauge Chart - Zones", zone_gauge_ref),
+        ("Polar Area Chart", polar_area_ref),
     ];
 
     view! {
@@ -361,6 +371,46 @@ pub fn App() -> impl IntoView {
                                         ],
                                         ..Default::default()
                                     }
+                                />
+                            </div>
+                        </div>
+
+                        <div class="card" node_ref=polar_area_ref>
+                            <div class="section-header">
+                                <h2 class="section-title">"Polar Area Chart"</h2>
+                            </div>
+                            <div class="chart-container">
+                                <PolarAreaChart
+                                    data=use_chart_data(vec![
+                                        PolarPoint::new("Mon", 12.0, "#4f46e5"),
+                                        PolarPoint::new("Tue", 19.0, "#e11d48"),
+                                        PolarPoint::new("Wed", 7.0, "#0891b2"),
+                                        PolarPoint::new("Thu", 15.0, "#16a34a"),
+                                        PolarPoint::new("Fri", 22.0, "#d97706"),
+                                    ]).signal()
+                                    config=PolarAreaChartConfig::default()
+                                />
+                            </div>
+                        </div>
+
+                        <div class="card" node_ref=polar_area_ref>
+                            <div class="section-header">
+                                <h2 class="section-title">"Radar Chart"</h2>
+                            </div>
+                            <div class="chart-container">
+                                <RadarChart
+                                    axes=use_chart_data(vec![
+                                        "Speed".to_string(),
+                                        "Power".to_string(),
+                                        "Defense".to_string(),
+                                        "Agility".to_string(),
+                                        "Stamina".to_string(),
+                                    ]).signal()
+                                    data=use_chart_data(vec![
+                                        (RadarSeries::new("Player A", "#4f46e5"), vec![80.0, 65.0, 70.0, 90.0, 60.0]),
+                                        (RadarSeries::new("Player B", "#e11d48"), vec![60.0, 85.0, 75.0, 55.0, 80.0]),
+                                    ]).signal()
+                                    config=RadarChartConfig::default()
                                 />
                             </div>
                         </div>
