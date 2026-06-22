@@ -37,7 +37,7 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-detaxine-charts = { version = "0.8.22", features = ["BarChart", "PieChart"] }
+detaxine-charts = { version = "0.8.28", features = ["BarChart", "PieChart"] }
 ```
 
 Available features: `BarChart`, `PieChart`, `DoughnutChart`, `LineCurveChart`, `CandlestickChart`.
