@@ -126,12 +126,7 @@ pub fn RadarChart(
             return;
         };
         let width = parent.client_width() as f64;
-        let parent_height = parent.client_height() as f64;
-        let height = if parent_height > 50.0 {
-            parent_height
-        } else {
-            width * 0.8
-        };
+        let height = width * 0.8;
 
         canvas.set_width((width * device_pixel_ratio) as u32);
         canvas.set_height((height * device_pixel_ratio) as u32);
