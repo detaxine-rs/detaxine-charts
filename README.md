@@ -1,7 +1,7 @@
 # detaxine-charts
 ![Stable Version](https://img.shields.io/crates/v/detaxine-charts)
 [![Docs.rs](https://docs.rs/detaxine-ui/badge.svg)](https://docs.rs/detaxine-ui)
-![Detaxine Charts CI](https://github.com/elonaire/detaxine-charts/actions/workflows/main.yml/badge.svg?branch=)
+![Detaxine Charts CI](https://github.com/detaxine-rs/detaxine-charts/actions/workflows/main.yml/badge.svg?branch=)
 
 A high-performance, canvas-based charting library for [Leptos](https://leptos.dev). Every chart is responsive by default, supports tooltips on hover, redraws automatically on window resize, and accepts reactive signals for live data streaming.
 
@@ -29,7 +29,7 @@ This crate is built using the [Leptos](https://leptos.dev) framework and uses HT
 
 ## Live Demo
 
-[https://elonaire.github.io/detaxine-charts/](https://elonaire.github.io/detaxine-charts/)
+[https://detaxine-rs.github.io/detaxine-charts/](https://detaxine-rs.github.io/detaxine-charts/)
 
 ## Usage
 
@@ -37,7 +37,7 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-detaxine-charts = { version = "0.8.31", features = ["BarChart", "PieChart"] }
+detaxine-charts = { version = "0.8.32", features = ["BarChart", "PieChart"] }
 ```
 
 Available features: `BarChart`, `PieChart`, `DoughnutChart`, `LineCurveChart`, `CandlestickChart`.
