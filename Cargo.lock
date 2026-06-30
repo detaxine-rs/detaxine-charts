@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "detaxine-charts"
-version = "0.8.31"
+version = "0.8.32"
 dependencies = [
  "leptos",
  "wasm-bindgen-test",
