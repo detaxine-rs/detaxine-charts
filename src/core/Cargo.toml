@@ -1,12 +1,12 @@
 [package]
 name = "detaxine-charts"
-version = "0.8.31"
+version = "0.8.32"
 edition = "2024"
 description = "A data visualization library for Leptos"
 license = "MIT OR Apache-2.0"
 license-file = "../../LICENSE-APACHE"
 repository = "https://github.com/detaxine-rs/detaxine-charts"
-homepage = "https://elonaire.github.io/detaxine-charts/"
+homepage = "https://detaxine-rs.github.io/detaxine-charts/"
 documentation = "https://docs.rs/detaxine-charts"
 readme = "../../README.md"
 keywords = ["leptos", "charts", "wasm", "visualization", "data"]
