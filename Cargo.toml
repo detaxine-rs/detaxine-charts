@@ -3,8 +3,8 @@ resolver = "2"
 members = ["src/core"]
 
 [workspace.dependencies]
-leptos = { version = "0.8.19", features = ["csr"] }
-web-sys = { version = "0.3.99", features = [
+leptos = { version = "0.8.20", features = ["csr"] }
+web-sys = { version = "0.3.103", features = [
     "HtmlSelectElement",
     "HtmlDocument",
     "HtmlCanvasElement",
@@ -12,7 +12,7 @@ web-sys = { version = "0.3.99", features = [
     "DomRect",
     "Element",
 ] }
-wasm-bindgen-test = "0.3.72"
+wasm-bindgen-test = "0.3.76"
 
 [profile.release]
 strip = true
