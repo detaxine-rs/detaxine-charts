@@ -1,6 +1,6 @@
 # detaxine-charts
 ![Stable Version](https://img.shields.io/crates/v/detaxine-charts)
-[![Docs.rs](https://docs.rs/detaxine-ui/badge.svg)](https://docs.rs/detaxine-ui)
+[![Docs.rs](https://docs.rs/detaxine-charts/badge.svg)](https://docs.rs/detaxine-charts)
 ![Detaxine Charts CI](https://github.com/detaxine-rs/detaxine-charts/actions/workflows/main.yml/badge.svg?branch=)
 
 A high-performance, canvas-based charting library for [Leptos](https://leptos.dev). Every chart is responsive by default, supports tooltips on hover, redraws automatically on window resize, and accepts reactive signals for live data streaming.
@@ -13,8 +13,8 @@ A high-performance, canvas-based charting library for [Leptos](https://leptos.de
 - [ ] Touch support for candlestick zoom/pan
 - [ ] Customizable tooltip renderer
 - [ ] Toggleable legend
-- [ ] Polar Area Chart
-- [ ] Radar Chart
+- [x] Polar Area Chart
+- [x] Radar Chart
 - [ ] Scatter Chart
 
 This crate is built using the [Leptos](https://leptos.dev) framework and uses HTML5 canvas to render the charts.
@@ -26,6 +26,8 @@ This crate is built using the [Leptos](https://leptos.dev) framework and uses HT
 - [x] DoughnutChart
 - [x] LineCurveChart
 - [x] CandlestickChart (with zoom & pan)
+- [x] PolarAreaChart
+- [x] RadarChart
 
 ## Live Demo
 
@@ -37,10 +39,10 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-detaxine-charts = { version = "0.8.33", features = ["BarChart", "PieChart"] }
+detaxine-charts = { version = "0.8.34", features = ["BarChart", "PieChart"] }
 ```
 
-Available features: `BarChart`, `PieChart`, `DoughnutChart`, `LineCurveChart`, `CandlestickChart`.
+Available features: `BarChart`, `PieChart`, `DoughnutChart`, `LineCurveChart`, `CandlestickChart`, `PolarAreaChart`, `RadarChart`.
 Omitting features entirely enables all charts.
 
 ## Example

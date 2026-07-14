@@ -1,0 +1,78 @@
+[workspace]
+
+[package]
+name = "ssr-check-v2"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+leptos = { version = "0.8.20" }
+leptos_router = { version = "0.8.14" }
+leptos_meta = { version = "0.8.6" }
+axum = { version = "0.8.9", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+leptos_axum = { version = "0.8.10", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+wasm-bindgen = { version = "0.2.126", optional = true }
+web-sys = { version = "0.3.103", features = [
+    "HtmlSelectElement",
+    "HtmlDocument",
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "DomRect",
+    "Element",
+] }
+detaxine-charts = { path = "../..", default-features = false, features = [
+    "BarChart",
+    "PieChart",
+    "DoughnutChart",
+    "LineCurveChart",
+    "CandlestickChart",
+    "GaugeChart",
+    "PolarAreaChart",
+    "RadarChart",
+] }
+
+[features]
+hydrate = [
+    "leptos/hydrate",
+    "dep:console_error_panic_hook",
+    "dep:wasm-bindgen",
+    "detaxine-charts/csr",
+]
+ssr = [
+    "dep:axum",
+    "dep:tokio",
+    "dep:leptos_axum",
+    "leptos/ssr",
+    "leptos_meta/ssr",
+    "leptos_router/ssr",
+    "detaxine-charts/ssr",
+]
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = 'z'
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[package.metadata.leptos]
+output-name = "ssr_check"
+site-root = "target/site"
+site-pkg-dir = "pkg"
+assets-dir = "public"
+site-addr = "127.0.0.1:3000"
+reload-port = 3001
+end2end-cmd = "npx playwright test"
+end2end-dir = "end2end"
+browserquery = "defaults"
+env = "DEV"
+bin-features = ["ssr"]
+bin-default-features = false
+lib-features = ["hydrate"]
+lib-default-features = false
+lib-profile-release = "wasm-release"

@@ -25,14 +25,14 @@
 //!
 //! ```toml
 //! [dependencies]
-//! detaxine-charts = "0.8.33"
+//! detaxine-charts = "0.8.34"
 //! ```
 //!
 //! Each chart is behind a feature flag so you only compile what you need:
 //!
 //! ```toml
 //! [dependencies]
-//! detaxine-charts = { version = "0.8.33", features = ["BarChart", "LineCurveChart"] }
+//! detaxine-charts = { version = "0.8.34", features = ["BarChart", "LineCurveChart"] }
 //! ```
 //!
 //! Available features: `BarChart`, `PieChart`, `DoughnutChart`, `LineCurveChart`, `CandlestickChart`.
@@ -225,7 +225,13 @@ pub use charts::bar_chart::bar_chart;
 pub use charts::candlestick_chart::candlestick_chart;
 #[cfg(feature = "DoughnutChart")]
 pub use charts::doughnut_chart::doughnut_chart;
+#[cfg(feature = "GaugeChart")]
+pub use charts::gauge_chart::gauge_chart;
 #[cfg(feature = "LineCurveChart")]
 pub use charts::line_chart::line_chart;
 #[cfg(feature = "PieChart")]
 pub use charts::pie_chart::pie_chart;
+#[cfg(feature = "PolarAreaChart")]
+pub use charts::polar_area_chart::polar_area_chart;
+#[cfg(feature = "RadarChart")]
+pub use charts::radar_chart::radar_chart;
