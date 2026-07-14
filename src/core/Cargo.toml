@@ -1,6 +1,6 @@
 [package]
 name = "detaxine-charts"
-version = "0.8.33"
+version = "0.8.34"
 edition = "2024"
 description = "A data visualization library for Leptos"
 license = "MIT OR Apache-2.0"
@@ -19,12 +19,22 @@ default = [
     "DoughnutChart",
     "LineCurveChart",
     "CandlestickChart",
+    "GaugeChart",
+    "PolarAreaChart",
+    "RadarChart",
+    "csr",
 ]
 BarChart = []
 PieChart = []
 DoughnutChart = []
 LineCurveChart = []
 CandlestickChart = []
+GaugeChart = []
+PolarAreaChart = []
+RadarChart = []
+csr = ["leptos/csr"]
+ssr = ["leptos/ssr"]
+hydrate = ["leptos/hydrate"]
 
 [dependencies]
 leptos = { workspace = true }
@@ -32,6 +42,20 @@ web-sys = { workspace = true }
 
 [dev-dependencies]
 wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+leptos_axum = "0.8.10"
+axum = "0.8.9"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "macros"] }
+any_spawner = { version = "0.3", features = ["tokio"] }
+tower-http = { version = "0.7.0", features = ["fs"] }
+
+[package.metadata.leptos]
+output-name = "ssr_check"
+site-root = "target/site"
+site-pkg-dir = "pkg"
+site-addr = "127.0.0.1:3000"
+env = "DEV"
 
 [package.metadata.docs.rs]
 no-deps = true
