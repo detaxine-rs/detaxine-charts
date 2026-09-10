@@ -3,6 +3,7 @@ use leptos::{
     html::{Canvas, Div},
     prelude::*,
 };
+use leptos_use::{UseResizeObserverReturn, use_resize_observer};
 use web_sys::{
     CanvasRenderingContext2d, HtmlCanvasElement, HtmlElement, wasm_bindgen::JsCast, window,
 };
@@ -100,6 +101,7 @@ pub fn RadarChart(
     let tooltip_ref = NodeRef::<Div>::new();
     let point_positions = StoredValue::new(Vec::<PointPos>::new());
     let config = StoredValue::new(config);
+    let container_ref = NodeRef::<Div>::new();
 
     let legend_meta = Memo::new(move |_| {
         data.get()
@@ -127,6 +129,10 @@ pub fn RadarChart(
         };
         let width = parent.client_width() as f64;
         let height = width * 0.8;
+
+        if width < 1.0 || height < 1.0 {
+            return;
+        }
 
         canvas.set_width((width * device_pixel_ratio) as u32);
         canvas.set_height((height * device_pixel_ratio) as u32);
@@ -163,9 +169,11 @@ pub fn RadarChart(
         redraw();
     });
 
-    let resize_listener = window_event_listener(ev::resize, move |_| {
-        redraw();
-    });
+    let redraw_for_observer = redraw.clone(); // redraw needs to be Fn, not FnOnce — see note below
+    let UseResizeObserverReturn { stop, .. } =
+        use_resize_observer(container_ref, move |_entries, _observer| {
+            redraw_for_observer();
+        });
 
     let canvas_mousemove_handler = move |e: ev::MouseEvent| {
         let Some(canvas) = canvas_ref.get() else {
@@ -175,22 +183,15 @@ pub fn RadarChart(
         let Some(tooltip) = tooltip_ref.get() else {
             return;
         };
-        let Some(win) = window() else { return };
 
         let rect = canvas.get_bounding_client_rect();
         let x = e.client_x() as f64 - rect.left();
         let y = e.client_y() as f64 - rect.top();
 
-        let device_pixel_ratio = win.device_pixel_ratio();
-        let scale_x = canvas.client_width() as f64 / canvas.width() as f64 * device_pixel_ratio;
-        let scale_y = canvas.client_height() as f64 / canvas.height() as f64 * device_pixel_ratio;
-        let lx = x * scale_x;
-        let ly = y * scale_y;
-
         let hit_radius = 8.0;
         let hovered = point_positions.get_value().into_iter().find(|p| {
-            let dx = lx - p.x;
-            let dy = ly - p.y;
+            let dx = x - p.x;
+            let dy = y - p.y;
             (dx * dx + dy * dy).sqrt() <= hit_radius
         });
 
@@ -229,7 +230,7 @@ pub fn RadarChart(
     };
 
     on_cleanup(move || {
-        resize_listener.remove();
+        stop();
     });
 
     view! {
@@ -244,7 +245,7 @@ pub fn RadarChart(
                     }).collect_view()}
                 </div>
             })}
-            <div style="position: relative; flex: 1; min-height: 0;">
+            <div node_ref=container_ref style="position: relative; flex: 1; min-height: 0;">
                 <canvas
                     node_ref=canvas_ref
                     style="width: 100%; height: 100%;"

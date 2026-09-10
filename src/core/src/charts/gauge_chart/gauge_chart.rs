@@ -1,4 +1,8 @@
-use leptos::{ev, html::Canvas, prelude::*};
+use leptos::{
+    html::{Canvas, Div},
+    prelude::*,
+};
+use leptos_use::{UseResizeObserverReturn, use_resize_observer};
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, wasm_bindgen::JsCast, window};
 
 use crate::utils::number_format::format_with_commas;
@@ -125,6 +129,7 @@ pub fn GaugeChart(
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
     let config = StoredValue::new(config);
+    let container_ref = NodeRef::<Div>::new();
 
     let redraw = move || {
         let Some(canvas) = canvas_ref.get() else {
@@ -142,6 +147,10 @@ pub fn GaugeChart(
         };
         let width = parent.client_width() as f64;
         let height = width * 0.75;
+
+        if width < 1.0 || height < 1.0 {
+            return;
+        }
 
         canvas.set_width((width * device_pixel_ratio) as u32);
         canvas.set_height((height * device_pixel_ratio) as u32);
@@ -165,16 +174,18 @@ pub fn GaugeChart(
         redraw();
     });
 
-    let resize_listener = window_event_listener(ev::resize, move |_| {
-        redraw();
-    });
+    let redraw_for_observer = redraw.clone(); // redraw needs to be Fn, not FnOnce — see note below
+    let UseResizeObserverReturn { stop, .. } =
+        use_resize_observer(container_ref, move |_entries, _observer| {
+            redraw_for_observer();
+        });
 
     on_cleanup(move || {
-        resize_listener.remove();
+        stop();
     });
 
     view! {
-        <div style="width: 100%;">
+        <div node_ref=container_ref style="width: 100%;">
             <canvas node_ref=canvas_ref style="width: 100%; height: 100%;"></canvas>
         </div>
     }

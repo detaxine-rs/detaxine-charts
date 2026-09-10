@@ -3,6 +3,7 @@ use leptos::{
     html::{Canvas, Div},
     prelude::*,
 };
+use leptos_use::{UseResizeObserverReturn, use_resize_observer};
 use web_sys::{
     CanvasRenderingContext2d, HtmlCanvasElement, HtmlElement, wasm_bindgen::JsCast, window,
 };
@@ -101,6 +102,7 @@ pub fn LineCurveChart(
     let crosshair_ref = NodeRef::<Div>::new();
     let point_positions = StoredValue::new(Vec::<PointPos>::new());
     let config = StoredValue::new(config);
+    let container_ref = NodeRef::<Div>::new();
 
     let series_meta = Memo::new(move |_| {
         data.get()
@@ -128,6 +130,11 @@ pub fn LineCurveChart(
         };
         let width = parent.client_width() as f64;
         let height = width * 0.6;
+
+        // NEW: skip drawing (and don't touch bar_rects) while genuinely hidden/unmeasured.
+        if width < 1.0 || height < 1.0 {
+            return;
+        }
 
         canvas.set_width((width * device_pixel_ratio) as u32);
         canvas.set_height((height * device_pixel_ratio) as u32);
@@ -164,9 +171,11 @@ pub fn LineCurveChart(
         redraw();
     });
 
-    let resize_listener = window_event_listener(ev::resize, move |_| {
-        redraw();
-    });
+    let redraw_for_observer = redraw.clone(); // redraw needs to be Fn, not FnOnce — see note below
+    let UseResizeObserverReturn { stop, .. } =
+        use_resize_observer(container_ref, move |_entries, _observer| {
+            redraw_for_observer();
+        });
 
     let canvas_mousemove_handler = move |e: ev::MouseEvent| {
         let Some(canvas) = canvas_ref.get() else {
@@ -179,15 +188,10 @@ pub fn LineCurveChart(
         let Some(crosshair) = crosshair_ref.get() else {
             return;
         };
-        let Some(win) = window() else { return };
 
         let rect = canvas.get_bounding_client_rect();
         let x = e.client_x() as f64 - rect.left();
         let y = e.client_y() as f64 - rect.top();
-
-        let device_pixel_ratio = win.device_pixel_ratio();
-        let scale_x = canvas.client_width() as f64 / canvas.width() as f64 * device_pixel_ratio;
-        let lx = x * scale_x;
 
         let positions = point_positions.get_value();
 
@@ -205,9 +209,9 @@ pub fn LineCurveChart(
         // points sharing the same x-index land on the same x coordinate
         // across series, so the closest x identifies the hovered index
         let mut closest_x = first.x;
-        let mut min_dist = (closest_x - lx).abs();
+        let mut min_dist = (closest_x - x).abs();
         for p in &positions {
-            let d = (p.x - lx).abs();
+            let d = (p.x - x).abs();
             if d < min_dist {
                 min_dist = d;
                 closest_x = p.x;
@@ -282,7 +286,7 @@ pub fn LineCurveChart(
     };
 
     on_cleanup(move || {
-        resize_listener.remove();
+        stop();
     });
 
     view! {
@@ -297,7 +301,7 @@ pub fn LineCurveChart(
                     }).collect_view()}
                 </div>
             })}
-            <div style="position: relative;">
+            <div node_ref=container_ref style="position: relative;">
                 <canvas
                     node_ref=canvas_ref
                     style="width: 100%; height: 100%;"

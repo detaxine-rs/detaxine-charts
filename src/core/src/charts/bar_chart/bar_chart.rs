@@ -4,6 +4,7 @@ use leptos::{
     html::{Canvas, Div},
     prelude::*,
 };
+use leptos_use::{UseResizeObserverReturn, use_resize_observer};
 use web_sys::{
     CanvasRenderingContext2d, HtmlCanvasElement, HtmlElement, wasm_bindgen::JsCast, window,
 };
@@ -79,6 +80,7 @@ pub fn BarChart(
     let tooltip_ref = NodeRef::<Div>::new();
     let bar_rects = StoredValue::new(Vec::<BarRect>::new());
     let config = StoredValue::new(config);
+    let container_ref = NodeRef::<Div>::new();
 
     let redraw = move || {
         let Some(canvas) = canvas_ref.get() else {
@@ -96,6 +98,10 @@ pub fn BarChart(
         };
         let width = parent.client_width() as f64;
         let height = width * 0.6;
+
+        if width < 1.0 || height < 1.0 {
+            return;
+        }
 
         canvas.set_width((width * device_pixel_ratio) as u32);
         canvas.set_height((height * device_pixel_ratio) as u32);
@@ -124,9 +130,11 @@ pub fn BarChart(
         redraw();
     });
 
-    let resize_listener = window_event_listener(ev::resize, move |_| {
-        redraw();
-    });
+    let redraw_for_observer = redraw.clone(); // redraw needs to be Fn, not FnOnce — see note below
+    let UseResizeObserverReturn { stop, .. } =
+        use_resize_observer(container_ref, move |_entries, _observer| {
+            redraw_for_observer();
+        });
 
     let canvas_mousemove_handler = move |e: ev::MouseEvent| {
         let Some(canvas) = canvas_ref.get() else {
@@ -136,22 +144,15 @@ pub fn BarChart(
         let Some(tooltip) = tooltip_ref.get() else {
             return;
         };
-        let Some(win) = window() else { return };
 
         let rect = canvas.get_bounding_client_rect();
         let x = e.client_x() as f64 - rect.left();
         let y = e.client_y() as f64 - rect.top();
 
-        let device_pixel_ratio = win.device_pixel_ratio();
-        let scale_x = canvas.client_width() as f64 / canvas.width() as f64 * device_pixel_ratio;
-        let scale_y = canvas.client_height() as f64 / canvas.height() as f64 * device_pixel_ratio;
-        let lx = x * scale_x;
-        let ly = y * scale_y;
-
         let hovered = bar_rects
             .get_value()
             .into_iter()
-            .find(|b| lx >= b.x && lx <= b.x + b.width && ly >= b.y && ly <= b.y + b.height);
+            .find(|b| x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height);
 
         let tooltip_el: HtmlElement = tooltip.into();
         let style = tooltip_el.style();
@@ -183,12 +184,12 @@ pub fn BarChart(
     };
 
     on_cleanup(move || {
-        resize_listener.remove();
+        stop();
     });
 
     view! {
         <div style="width: 100%;">
-            <div style="position: relative;">
+            <div node_ref=container_ref style="position: relative;">
                 <canvas
                     node_ref=canvas_ref
                     style="width: 100%; height: 100%;"
