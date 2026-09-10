@@ -38,6 +38,7 @@ hydrate = ["leptos/hydrate"]
 
 [dependencies]
 leptos = { workspace = true }
+leptos-use = "0.19.2"
 web-sys = { workspace = true }
 
 [dev-dependencies]
