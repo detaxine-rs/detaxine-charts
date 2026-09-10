@@ -457,7 +457,7 @@ dependencies = [
 
 [[package]]
 name = "detaxine-charts"
-version = "0.8.34"
+version = "0.8.35"
 dependencies = [
  "any_spawner",
  "axum",

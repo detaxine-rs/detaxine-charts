@@ -25,14 +25,14 @@
 //!
 //! ```toml
 //! [dependencies]
-//! detaxine-charts = "0.8.34"
+//! detaxine-charts = "0.8.35"
 //! ```
 //!
 //! Each chart is behind a feature flag so you only compile what you need:
 //!
 //! ```toml
 //! [dependencies]
-//! detaxine-charts = { version = "0.8.34", features = ["BarChart", "LineCurveChart"] }
+//! detaxine-charts = { version = "0.8.35", features = ["BarChart", "LineCurveChart"] }
 //! ```
 //!
 //! Available features: `BarChart`, `PieChart`, `DoughnutChart`, `LineCurveChart`, `CandlestickChart`.
