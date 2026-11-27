@@ -69,7 +69,7 @@ impl Series {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct PointPos {
     x: f64,
     y: f64,
@@ -77,6 +77,25 @@ struct PointPos {
     value: i64,
     series_name: String,
     series_color: String,
+    series_index: usize,
+    point_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct GridLine {
+    y: f64,
+    value: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct MultilineLayout {
+    point_positions: Vec<PointPos>,
+    grid_lines: Vec<GridLine>,
+    left_padding: f64,
+    axis_padding: f64,
+    point_spacing: f64,
+    num_points: usize,
+    max_value: f64,
 }
 
 fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
@@ -89,12 +108,8 @@ fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
 
 #[component]
 pub fn LineCurveChart(
-    /// Reactive signal — update data and the chart redraws automatically.
-    #[prop(into)]
-    data: MaybeProp<Vec<(Series, Vec<DataPoint>)>>,
-    /// Reactive signal — update x labels and the chart redraws automatically.
-    #[prop(into)]
-    x: MaybeProp<Vec<String>>,
+    #[prop(into)] data: MaybeProp<Vec<(Series, Vec<DataPoint>)>>,
+    #[prop(into)] x: MaybeProp<Vec<String>>,
     #[prop(optional, default = Default::default())] config: LineCurveChartConfig,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
@@ -131,7 +146,6 @@ pub fn LineCurveChart(
         let width = parent.client_width() as f64;
         let height = width * 0.6;
 
-        // NEW: skip drawing (and don't touch bar_rects) while genuinely hidden/unmeasured.
         if width < 1.0 || height < 1.0 {
             return;
         }
@@ -164,14 +178,13 @@ pub fn LineCurveChart(
         point_positions.set_value(positions);
     };
 
-    // effect — redraw when data or x labels change
     Effect::new(move |_| {
-        let _ = data.get(); // tracked
-        let _ = x.get(); // tracked
+        let _ = data.get();
+        let _ = x.get();
         redraw();
     });
 
-    let redraw_for_observer = redraw.clone(); // redraw needs to be Fn, not FnOnce — see note below
+    let redraw_for_observer = redraw.clone();
     let UseResizeObserverReturn { stop, .. } =
         use_resize_observer(container_ref, move |_entries, _observer| {
             redraw_for_observer();
@@ -200,51 +213,20 @@ pub fn LineCurveChart(
         let tooltip_style = tooltip_el.style();
         let crosshair_style = crosshair_el.style();
 
-        let Some(first) = positions.first() else {
+        let hovered = find_hovered_points(&positions, x, 40.0, 0.5);
+        let Some((closest_x, matched)) = hovered else {
             let _ = tooltip_style.set_property("display", "none");
             let _ = crosshair_style.set_property("display", "none");
             return;
         };
 
-        // points sharing the same x-index land on the same x coordinate
-        // across series, so the closest x identifies the hovered index
-        let mut closest_x = first.x;
-        let mut min_dist = (closest_x - x).abs();
-        for p in &positions {
-            let d = (p.x - x).abs();
-            if d < min_dist {
-                min_dist = d;
-                closest_x = p.x;
-            }
-        }
-
-        // hide everything once the cursor strays too far from any index,
-        // e.g. over the y-axis labels or outside the plotted area
-        let hit_threshold = 40.0;
-        if min_dist > hit_threshold {
-            let _ = tooltip_style.set_property("display", "none");
-            let _ = crosshair_style.set_property("display", "none");
-            return;
-        }
-
-        let epsilon = 0.5;
-        let matched: Vec<_> = positions
-            .iter()
-            .filter(|p| (p.x - closest_x).abs() < epsilon)
-            .collect();
-
-        let Some(label_point) = matched.first() else {
-            let _ = tooltip_style.set_property("display", "none");
-            let _ = crosshair_style.set_property("display", "none");
-            return;
-        };
-
-        // crosshair — a dashed vertical line spanning the canvas height
+        // crosshair
         let _ = crosshair_style.set_property("display", "block");
         let _ = crosshair_style.set_property("left", &format!("{}px", closest_x));
         let _ = crosshair_style.set_property("height", &format!("{}px", canvas.client_height()));
 
-        // combined tooltip — one line per series at this index
+        // tooltip content
+        let label_point = matched[0];
         let mut html = format!("<strong>{}</strong>", label_point.label);
         for p in &matched {
             html.push_str(&format!(
@@ -258,18 +240,10 @@ pub fn LineCurveChart(
         let _ = tooltip_style.set_property("display", "block");
         tooltip_el.set_inner_html(&html);
 
-        // measure after content is set so offset_width reflects the new content
         let tooltip_width = tooltip_el.offset_width() as f64;
         let canvas_width = canvas.client_width() as f64;
-        let gap = 12.0;
-
-        let left = if closest_x + gap + tooltip_width > canvas_width {
-            // flip to the left side of the crosshair
-            (closest_x - gap - tooltip_width).max(0.0)
-        } else {
-            closest_x + gap
-        };
-
+        // NOTE: gap 12.0 / top offset -10.0 differ from other charts (10.0 / -28.0).
+        let left = tooltip_left(closest_x, tooltip_width, canvas_width, 12.0);
         let _ = tooltip_style.set_property("left", &format!("{}px", left));
         let _ = tooltip_style.set_property("top", &format!("{}px", y - 10.0));
     };
@@ -339,6 +313,74 @@ pub fn LineCurveChart(
     }
 }
 
+fn compute_multiline_layout(
+    width: f64,
+    height: f64,
+    data: &[(Series, Vec<DataPoint>)],
+    x_labels: &[String],
+) -> Option<MultilineLayout> {
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+
+    let max_raw = data
+        .iter()
+        .flat_map(|(_, points)| points.iter().map(|d| d.y))
+        .max()?;
+    let max_value = nice_ceiling(max_raw as f64 * 1.0);
+
+    let first = data.first()?;
+    let num_points = first.1.len();
+    if num_points < 2 {
+        return None;
+    }
+
+    let axis_padding = (height * 0.12).clamp(28.0, 50.0);
+    let left_padding = (width * 0.12).clamp(35.0, 50.0);
+    let available_height = height - axis_padding * 2.0;
+    let point_spacing = (width - left_padding - axis_padding) / (num_points as f64 - 1.0);
+
+    let num_grid_lines = 5;
+    let step_value = max_value / num_grid_lines as f64;
+    let step_height = available_height / num_grid_lines as f64;
+
+    let grid_lines: Vec<GridLine> = (0..=num_grid_lines)
+        .map(|i| GridLine {
+            y: height - axis_padding - i as f64 * step_height,
+            value: (i as f64 * step_value).round(),
+        })
+        .collect();
+
+    let mut point_positions = Vec::new();
+    for (s_idx, (series, points)) in data.iter().enumerate() {
+        for (p_idx, datapoint) in points.iter().enumerate() {
+            let x = left_padding + p_idx as f64 * point_spacing;
+            let y = height - axis_padding - (datapoint.y as f64 / max_value) * available_height;
+
+            point_positions.push(PointPos {
+                x,
+                y,
+                label: x_labels.get(p_idx).cloned().unwrap_or_default(),
+                value: datapoint.y,
+                series_name: series.name.clone(),
+                series_color: series.color.clone(),
+                series_index: s_idx,
+                point_index: p_idx,
+            });
+        }
+    }
+
+    Some(MultilineLayout {
+        point_positions,
+        grid_lines,
+        left_padding,
+        axis_padding,
+        point_spacing,
+        num_points,
+        max_value,
+    })
+}
+
 fn draw_multiline_chart(
     context: &CanvasRenderingContext2d,
     width: f64,
@@ -347,31 +389,13 @@ fn draw_multiline_chart(
     x_labels: &[String],
     config: &LineCurveChartConfig,
 ) -> Vec<PointPos> {
-    let axis_padding = (height * 0.12).clamp(28.0, 50.0);
-    let left_padding = (width * 0.12).clamp(35.0, 50.0);
+    let Some(layout) = compute_multiline_layout(width, height, data, x_labels) else {
+        return vec![];
+    };
+
     let y_label_font_size = (height * 0.045).clamp(9.0, 12.0);
     let x_label_font_size = (height * 0.04).clamp(8.0, 11.0);
     let title_font_size = (height * 0.045).clamp(10.0, 13.0);
-
-    let Some(max_raw) = data
-        .iter()
-        .flat_map(|(_, points)| points.iter().map(|d| d.y))
-        .max()
-    else {
-        return vec![];
-    };
-    // TODO: I might allow users to customize normalization(1.0 might be default)
-    let max_value = nice_ceiling(max_raw as f64 * 1.0);
-
-    let Some(first) = data.first() else {
-        return vec![];
-    };
-    let num_points = first.1.len() as f64;
-    if num_points < 2.0 {
-        return vec![];
-    };
-    let available_height = height - axis_padding * 2.0;
-    let point_spacing = (width - left_padding - axis_padding) / (num_points - 1.0);
 
     context.clear_rect(0.0, 0.0, width, height);
 
@@ -379,8 +403,8 @@ fn draw_multiline_chart(
         context.set_stroke_style_str("#cccccc");
         context.set_line_width(1.0);
         context.begin_path();
-        context.move_to(left_padding, height - axis_padding);
-        context.line_to(width, height - axis_padding);
+        context.move_to(layout.left_padding, height - layout.axis_padding);
+        context.line_to(width, height - layout.axis_padding);
         context.stroke();
     }
 
@@ -388,14 +412,10 @@ fn draw_multiline_chart(
         context.set_stroke_style_str("#cccccc");
         context.set_line_width(1.0);
         context.begin_path();
-        context.move_to(left_padding, 0.0);
-        context.line_to(left_padding, height - axis_padding);
+        context.move_to(layout.left_padding, 0.0);
+        context.line_to(layout.left_padding, height - layout.axis_padding);
         context.stroke();
     }
-
-    let num_grid_lines = 5;
-    let step_value = max_value / num_grid_lines as f64;
-    let step_height = available_height / num_grid_lines as f64;
 
     context.set_stroke_style_str("#cccccc");
     context.set_line_width(1.0);
@@ -404,80 +424,67 @@ fn draw_multiline_chart(
     context.set_text_baseline("middle");
     context.set_font(&format!("{}px Arial", y_label_font_size));
 
-    for i in 0..=num_grid_lines {
-        let y = height - axis_padding - i as f64 * step_height;
-
+    for line in &layout.grid_lines {
         if config.show_grid {
             context.begin_path();
-            context.move_to(left_padding, y);
-            context.line_to(width, y);
+            context.move_to(layout.left_padding, line.y);
+            context.line_to(width, line.y);
             context.stroke();
         }
-
         if config.show_y_axis_labels {
-            let label = (i as f64 * step_value).round();
-            let _ = context.fill_text(&format_short_number(label), left_padding - 10.0, y);
+            let _ = context.fill_text(
+                &format_short_number(line.value),
+                layout.left_padding - 10.0,
+                line.y,
+            );
         }
     }
 
-    let mut point_positions = Vec::new();
+    for (s_idx, (series, points)) in data.iter().enumerate() {
+        let series_points: Vec<&PointPos> = layout
+            .point_positions
+            .iter()
+            .filter(|p| p.series_index == s_idx)
+            .collect();
+        if series_points.is_empty() {
+            continue;
+        }
 
-    for (series, points) in data {
         context.set_stroke_style_str(series.color.as_str());
         context.set_line_width(config.stroke_width);
 
         context.begin_path();
-        let first_y = height - axis_padding - (points[0].y as f64 / max_value) * available_height;
-        context.move_to(left_padding, first_y);
-
-        for i in 1..points.len() {
-            let x = left_padding + i as f64 * point_spacing;
-            let y = height - axis_padding - (points[i].y as f64 / max_value) * available_height;
-
-            let prev_x = left_padding + (i - 1) as f64 * point_spacing;
-            let prev_y =
-                height - axis_padding - (points[i - 1].y as f64 / max_value) * available_height;
-
-            let ctrl1_x = prev_x + point_spacing / 3.0;
-            let ctrl1_y = prev_y;
-            let ctrl2_x = x - point_spacing / 3.0;
-            let ctrl2_y = y;
-
-            context.bezier_curve_to(ctrl1_x, ctrl1_y, ctrl2_x, ctrl2_y, x, y);
+        context.move_to(series_points[0].x, series_points[0].y);
+        for i in 1..series_points.len() {
+            let prev = series_points[i - 1];
+            let curr = series_points[i];
+            let ctrl1_x = prev.x + layout.point_spacing / 3.0;
+            let ctrl1_y = prev.y;
+            let ctrl2_x = curr.x - layout.point_spacing / 3.0;
+            let ctrl2_y = curr.y;
+            context.bezier_curve_to(ctrl1_x, ctrl1_y, ctrl2_x, ctrl2_y, curr.x, curr.y);
         }
         context.stroke();
 
         if config.show_area_chart {
             context.line_to(
-                left_padding + (points.len() as f64 - 1.0) * point_spacing,
-                height - axis_padding,
+                layout.left_padding + (points.len() as f64 - 1.0) * layout.point_spacing,
+                height - layout.axis_padding,
             );
-            context.line_to(left_padding, height - axis_padding);
+            context.line_to(layout.left_padding, height - layout.axis_padding);
             context.close_path();
             let fill_color = format!("{}33", &series.color);
             context.set_fill_style_str(&fill_color);
             context.fill();
         }
 
-        for (i, datapoint) in points.iter().enumerate() {
-            let x = left_padding + i as f64 * point_spacing;
-            let y = height - axis_padding - (datapoint.y as f64 / max_value) * available_height;
-
-            if config.show_inflection_points {
-                context.set_fill_style_str(series.color.as_str());
+        if config.show_inflection_points {
+            context.set_fill_style_str(series.color.as_str());
+            for point in &series_points {
                 context.begin_path();
-                let _ = context.arc(x, y, 3.0, 0.0, std::f64::consts::PI * 2.0);
+                let _ = context.arc(point.x, point.y, 3.0, 0.0, std::f64::consts::PI * 2.0);
                 context.fill();
             }
-
-            point_positions.push(PointPos {
-                x,
-                y,
-                label: x_labels.get(i).cloned().unwrap_or_default(),
-                value: datapoint.y,
-                series_name: series.name.clone(),
-                series_color: series.color.clone(),
-            });
         }
     }
 
@@ -487,8 +494,8 @@ fn draw_multiline_chart(
         context.set_text_baseline("middle");
         context.set_font(&format!("{}px Arial", x_label_font_size));
         for (i, x_label) in x_labels.iter().enumerate() {
-            let x = left_padding + i as f64 * point_spacing;
-            let y = height - axis_padding / 2.0;
+            let x = layout.left_padding + i as f64 * layout.point_spacing;
+            let y = height - layout.axis_padding / 2.0;
             context.save();
             let _ = context.translate(x, y);
             let _ = context.rotate(-std::f64::consts::PI / 4.0);
@@ -502,8 +509,8 @@ fn draw_multiline_chart(
         context.set_font(&format!("bold {}px Arial", title_font_size));
         let _ = context.fill_text(
             &config.x_axis_title,
-            (left_padding + width) / 2.0,
-            height - axis_padding / 4.0,
+            (layout.left_padding + width) / 2.0,
+            height - layout.axis_padding / 4.0,
         );
     }
 
@@ -513,64 +520,59 @@ fn draw_multiline_chart(
         context.set_font(&format!("bold {}px Arial", title_font_size));
         context.save();
         let _ = context.rotate(-std::f64::consts::PI / 2.0);
-        let _ = context.fill_text(&config.y_axis_title, -(height / 2.0), left_padding / 4.0);
+        let _ = context.fill_text(
+            &config.y_axis_title,
+            -(height / 2.0),
+            layout.left_padding / 4.0,
+        );
         context.restore();
     }
 
-    point_positions
+    layout.point_positions
+}
+
+fn find_hovered_points<'a>(
+    positions: &'a [PointPos],
+    cursor_x: f64,
+    hit_threshold: f64,
+    epsilon: f64,
+) -> Option<(f64, Vec<&'a PointPos>)> {
+    let first = positions.first()?;
+
+    let mut closest_x = first.x;
+    let mut min_dist = (closest_x - cursor_x).abs();
+    for p in positions {
+        let d = (p.x - cursor_x).abs();
+        if d < min_dist {
+            min_dist = d;
+            closest_x = p.x;
+        }
+    }
+
+    if min_dist > hit_threshold {
+        return None;
+    }
+
+    let matched: Vec<&PointPos> = positions
+        .iter()
+        .filter(|p| (p.x - closest_x).abs() < epsilon)
+        .collect();
+
+    if matched.is_empty() {
+        None
+    } else {
+        Some((closest_x, matched))
+    }
+}
+
+fn tooltip_left(x: f64, tooltip_width: f64, canvas_width: f64, gap: f64) -> f64 {
+    if x + gap + tooltip_width > canvas_width {
+        (x - gap - tooltip_width).max(0.0)
+    } else {
+        x + gap
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use wasm_bindgen_test::*;
-
-    wasm_bindgen_test_configure!(run_in_browser);
-
-    fn mock_context() -> Option<CanvasRenderingContext2d> {
-        let document = web_sys::window()?.document()?;
-        let canvas = document
-            .create_element("canvas")
-            .ok()?
-            .dyn_into::<HtmlCanvasElement>()
-            .ok()?;
-        get_context(&canvas)
-    }
-
-    #[wasm_bindgen_test]
-    fn test_draw_multiline_chart() {
-        let Some(context) = mock_context() else {
-            return;
-        };
-
-        let data = vec![
-            (
-                Series::new("Revenue", "#4f46e5"),
-                vec![
-                    DataPoint::new(120),
-                    DataPoint::new(85),
-                    DataPoint::new(200),
-                    DataPoint::new(150),
-                ],
-            ),
-            (
-                Series::new("Expenses", "#e11d48"),
-                vec![
-                    DataPoint::new(80),
-                    DataPoint::new(90),
-                    DataPoint::new(110),
-                    DataPoint::new(95),
-                ],
-            ),
-        ];
-        let x_labels = vec![
-            "Jan".to_string(),
-            "Feb".to_string(),
-            "Mar".to_string(),
-            "Apr".to_string(),
-        ];
-        let config = LineCurveChartConfig::default();
-
-        draw_multiline_chart(&context, 800.0, 480.0, &data, &x_labels, &config);
-    }
-}
+#[path = "tests.rs"]
+mod tests;

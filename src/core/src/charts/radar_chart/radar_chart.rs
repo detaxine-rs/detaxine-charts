@@ -4,6 +4,7 @@ use leptos::{
     prelude::*,
 };
 use leptos_use::{UseResizeObserverReturn, use_resize_observer};
+use std::f64::consts::PI;
 use web_sys::{
     CanvasRenderingContext2d, HtmlCanvasElement, HtmlElement, wasm_bindgen::JsCast, window,
 };
@@ -20,12 +21,7 @@ pub struct RadarChartConfig {
     pub label_color: String,
     pub show_points: bool,
     pub stroke_width: f64,
-    /// Opacity applied to each series' fill, from 0.0 (no fill) to 1.0
-    /// (fully opaque). A semi-transparent fill lets overlapping series
-    /// remain distinguishable.
     pub fill_opacity: f64,
-    /// Maximum value represented by the outer ring. When `None`, it's
-    /// derived automatically from the largest value across all series.
     pub max_value: Option<f64>,
 }
 
@@ -61,7 +57,7 @@ impl Series {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct PointPos {
     x: f64,
     y: f64,
@@ -69,6 +65,29 @@ struct PointPos {
     value: f64,
     series_name: String,
     series_color: String,
+    series_index: usize,
+    axis_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct AxisLabel {
+    x: f64,
+    y: f64,
+    text: String,
+    align: &'static str, // "center" | "left" | "right"
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct RadarLayout {
+    points: Vec<PointPos>,
+    grid_radii: Vec<f64>,
+    spoke_ends: Vec<(f64, f64)>,
+    axis_labels: Vec<AxisLabel>,
+    center_x: f64,
+    center_y: f64,
+    max_radius: f64,
+    label_font_size: f64,
+    max_value: f64,
 }
 
 fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
@@ -79,22 +98,29 @@ fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
         .ok()
 }
 
-/// Applies an alpha channel to a hex color string, used to fade series
-/// fills without requiring the caller to pre-format colors with alpha.
 fn with_alpha(hex_color: &str, opacity: f64) -> String {
     let alpha_byte = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("{}{:02x}", hex_color, alpha_byte)
 }
 
+fn axis_angle(i: usize, num_axes: usize) -> f64 {
+    -PI / 2.0 + i as f64 * (2.0 * PI / num_axes as f64)
+}
+
+fn label_text_align(cos: f64) -> &'static str {
+    if cos.abs() < 0.15 {
+        "center"
+    } else if cos > 0.0 {
+        "left"
+    } else {
+        "right"
+    }
+}
+
 #[component]
 pub fn RadarChart(
-    /// Reactive signal — update data and the chart redraws automatically.
-    /// Each tuple is one series plotted across every axis.
-    #[prop(into)]
-    data: MaybeProp<Vec<(Series, Vec<f64>)>>,
-    /// Reactive signal — the axis labels, one per spoke (e.g. skill names).
-    #[prop(into)]
-    axes: MaybeProp<Vec<String>>,
+    #[prop(into)] data: MaybeProp<Vec<(Series, Vec<f64>)>>,
+    #[prop(into)] axes: MaybeProp<Vec<String>>,
     #[prop(optional, default = Default::default())] config: RadarChartConfig,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
@@ -164,12 +190,12 @@ pub fn RadarChart(
     };
 
     Effect::new(move |_| {
-        let _ = data.get(); // tracked
-        let _ = axes.get(); // tracked
+        let _ = data.get();
+        let _ = axes.get();
         redraw();
     });
 
-    let redraw_for_observer = redraw.clone(); // redraw needs to be Fn, not FnOnce — see note below
+    let redraw_for_observer = redraw.clone();
     let UseResizeObserverReturn { stop, .. } =
         use_resize_observer(container_ref, move |_entries, _observer| {
             redraw_for_observer();
@@ -188,12 +214,8 @@ pub fn RadarChart(
         let x = e.client_x() as f64 - rect.left();
         let y = e.client_y() as f64 - rect.top();
 
-        let hit_radius = 8.0;
-        let hovered = point_positions.get_value().into_iter().find(|p| {
-            let dx = x - p.x;
-            let dy = y - p.y;
-            (dx * dx + dy * dy).sqrt() <= hit_radius
-        });
+        let points = point_positions.get_value();
+        let hovered = find_point_at(&points, x, y, 8.0);
 
         let tooltip_el: HtmlElement = tooltip.into();
         let style = tooltip_el.style();
@@ -208,12 +230,7 @@ pub fn RadarChart(
 
             let tooltip_width = tooltip_el.offset_width() as f64;
             let canvas_width = canvas.client_width() as f64;
-            let gap = 10.0;
-            let left = if x + gap + tooltip_width > canvas_width {
-                (x - gap - tooltip_width).max(0.0)
-            } else {
-                x + gap
-            };
+            let left = tooltip_left(x, tooltip_width, canvas_width, 10.0);
 
             let _ = style.set_property("left", &format!("{}px", left));
             let _ = style.set_property("top", &format!("{}px", y - 28.0));
@@ -272,18 +289,17 @@ pub fn RadarChart(
     }
 }
 
-fn draw_radar_chart(
-    context: &CanvasRenderingContext2d,
+fn compute_radar_layout(
     width: f64,
     height: f64,
     data: &[(Series, Vec<f64>)],
     axis_labels: &[String],
     config: &RadarChartConfig,
-) -> Vec<PointPos> {
+) -> Option<RadarLayout> {
     let num_axes = axis_labels.len();
-    if num_axes < 3 || data.is_empty() {
-        return vec![];
-    };
+    if num_axes < 3 || data.is_empty() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
 
     let label_margin = (height.min(width) * 0.16).clamp(30.0, 60.0);
     let center_x = width / 2.0;
@@ -297,26 +313,98 @@ fn draw_radar_chart(
             .max(f64::EPSILON)
     });
 
-    context.clear_rect(0.0, 0.0, width, height);
+    let num_rings = config.num_grid_rings.max(1);
+    let grid_radii: Vec<f64> = (1..=num_rings)
+        .map(|i| max_radius * (i as f64 / num_rings as f64))
+        .collect();
 
-    let angle_for = |i: usize| {
-        -std::f64::consts::PI / 2.0 + i as f64 * (2.0 * std::f64::consts::PI / num_axes as f64)
+    let spoke_ends: Vec<(f64, f64)> = (0..num_axes)
+        .map(|i| {
+            let angle = axis_angle(i, num_axes);
+            (
+                center_x + max_radius * angle.cos(),
+                center_y + max_radius * angle.sin(),
+            )
+        })
+        .collect();
+
+    let label_font_size = (max_radius * 0.07).clamp(9.0, 12.0);
+    let axis_labels_out: Vec<AxisLabel> = axis_labels
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let angle = axis_angle(i, num_axes);
+            let label_radius = max_radius + label_font_size + 6.0;
+            let cos = angle.cos();
+            AxisLabel {
+                x: center_x + label_radius * cos,
+                y: center_y + label_radius * angle.sin(),
+                text: text.clone(),
+                align: label_text_align(cos),
+            }
+        })
+        .collect();
+
+    let mut points = Vec::new();
+    for (s_idx, (series, values)) in data.iter().enumerate() {
+        if values.len() != num_axes {
+            continue;
+        }
+        for (i, value) in values.iter().enumerate() {
+            let angle = axis_angle(i, num_axes);
+            let ratio = (value.max(0.0) / max_value).min(1.0);
+            let r = max_radius * ratio;
+            points.push(PointPos {
+                x: center_x + r * angle.cos(),
+                y: center_y + r * angle.sin(),
+                axis_label: axis_labels[i].clone(),
+                value: *value,
+                series_name: series.name.clone(),
+                series_color: series.color.clone(),
+                series_index: s_idx,
+                axis_index: i,
+            });
+        }
+    }
+
+    Some(RadarLayout {
+        points,
+        grid_radii,
+        spoke_ends,
+        axis_labels: axis_labels_out,
+        center_x,
+        center_y,
+        max_radius,
+        label_font_size,
+        max_value,
+    })
+}
+
+fn draw_radar_chart(
+    context: &CanvasRenderingContext2d,
+    width: f64,
+    height: f64,
+    data: &[(Series, Vec<f64>)],
+    axis_labels: &[String],
+    config: &RadarChartConfig,
+) -> Vec<PointPos> {
+    let Some(layout) = compute_radar_layout(width, height, data, axis_labels, config) else {
+        return vec![];
     };
 
-    // grid rings — concentric polygons (not circles) since a radar chart's
-    // axes are discrete spokes, not a continuous radial scale
+    let num_axes = axis_labels.len();
+    context.clear_rect(0.0, 0.0, width, height);
+
+    // grid rings
     if config.show_grid {
-        let num_rings = config.num_grid_rings.max(1);
         context.set_stroke_style_str(&config.grid_color);
         context.set_line_width(1.0);
-
-        for ring in 1..=num_rings {
-            let ring_radius = max_radius * (ring as f64 / num_rings as f64);
+        for ring_radius in &layout.grid_radii {
             context.begin_path();
             for i in 0..num_axes {
-                let angle = angle_for(i);
-                let x = center_x + ring_radius * angle.cos();
-                let y = center_y + ring_radius * angle.sin();
+                let angle = axis_angle(i, num_axes);
+                let x = layout.center_x + ring_radius * angle.cos();
+                let y = layout.center_y + ring_radius * angle.sin();
                 if i == 0 {
                     context.move_to(x, y);
                 } else {
@@ -328,49 +416,37 @@ fn draw_radar_chart(
         }
     }
 
-    // spokes — one line from center to each axis label
+    // spokes
     context.set_stroke_style_str(&config.axis_color);
     context.set_line_width(1.0);
-    for i in 0..num_axes {
-        let angle = angle_for(i);
+    for (ex, ey) in &layout.spoke_ends {
         context.begin_path();
-        context.move_to(center_x, center_y);
-        context.line_to(
-            center_x + max_radius * angle.cos(),
-            center_y + max_radius * angle.sin(),
-        );
+        context.move_to(layout.center_x, layout.center_y);
+        context.line_to(*ex, *ey);
         context.stroke();
     }
 
-    // axis labels, placed just outside the outer ring at each spoke's angle
-    let label_font_size = (max_radius * 0.07).clamp(9.0, 12.0);
+    // axis labels
     context.set_fill_style_str(&config.label_color);
-    context.set_font(&format!("{}px Arial", label_font_size));
+    context.set_font(&format!("{}px Arial", layout.label_font_size));
     context.set_text_baseline("middle");
-    for (i, label) in axis_labels.iter().enumerate() {
-        let angle = angle_for(i);
-        let label_radius = max_radius + label_font_size + 6.0;
-        let lx = center_x + label_radius * angle.cos();
-        let ly = center_y + label_radius * angle.sin();
-
-        // align text away from the center so labels don't overlap the chart,
-        // based on which side of the vertical axis the spoke falls on
-        let cos = angle.cos();
-        context.set_text_align(if cos.abs() < 0.15 {
-            "center"
-        } else if cos > 0.0 {
-            "left"
-        } else {
-            "right"
-        });
-
-        let _ = context.fill_text(label, lx, ly);
+    for label in &layout.axis_labels {
+        context.set_text_align(label.align);
+        let _ = context.fill_text(&label.text, label.x, label.y);
     }
 
-    let mut point_positions = Vec::new();
-
-    for (series, values) in data {
+    // series polygons + points
+    for (s_idx, (series, values)) in data.iter().enumerate() {
         if values.len() != num_axes {
+            continue;
+        }
+
+        let series_points: Vec<&PointPos> = layout
+            .points
+            .iter()
+            .filter(|p| p.series_index == s_idx)
+            .collect();
+        if series_points.is_empty() {
             continue;
         }
 
@@ -379,119 +455,51 @@ fn draw_radar_chart(
         context.set_fill_style_str(&with_alpha(&series.color, config.fill_opacity));
 
         context.begin_path();
-        for i in 0..num_axes {
-            let angle = angle_for(i);
-            let ratio = (values[i].max(0.0) / max_value).min(1.0);
-            let r = max_radius * ratio;
-            let x = center_x + r * angle.cos();
-            let y = center_y + r * angle.sin();
-
+        for (i, p) in series_points.iter().enumerate() {
             if i == 0 {
-                context.move_to(x, y);
+                context.move_to(p.x, p.y);
             } else {
-                context.line_to(x, y);
+                context.line_to(p.x, p.y);
             }
         }
         context.close_path();
         context.fill();
         context.stroke();
 
-        for i in 0..num_axes {
-            let angle = angle_for(i);
-            let ratio = (values[i].max(0.0) / max_value).min(1.0);
-            let r = max_radius * ratio;
-            let x = center_x + r * angle.cos();
-            let y = center_y + r * angle.sin();
-
-            if config.show_points {
-                context.set_fill_style_str(series.color.as_str());
+        if config.show_points {
+            context.set_fill_style_str(series.color.as_str());
+            for p in &series_points {
                 context.begin_path();
-                let _ = context.arc(x, y, 3.0, 0.0, 2.0 * std::f64::consts::PI);
+                let _ = context.arc(p.x, p.y, 3.0, 0.0, 2.0 * PI);
                 context.fill();
             }
-
-            point_positions.push(PointPos {
-                x,
-                y,
-                axis_label: axis_labels.get(i).cloned().unwrap_or_default(),
-                value: values[i],
-                series_name: series.name.clone(),
-                series_color: series.color.clone(),
-            });
         }
     }
 
-    point_positions
+    layout.points
+}
+
+fn find_point_at<'a>(
+    points: &'a [PointPos],
+    x: f64,
+    y: f64,
+    hit_radius: f64,
+) -> Option<&'a PointPos> {
+    points.iter().find(|p| {
+        let dx = x - p.x;
+        let dy = y - p.y;
+        (dx * dx + dy * dy).sqrt() <= hit_radius
+    })
+}
+
+fn tooltip_left(x: f64, tooltip_width: f64, canvas_width: f64, gap: f64) -> f64 {
+    if x + gap + tooltip_width > canvas_width {
+        (x - gap - tooltip_width).max(0.0)
+    } else {
+        x + gap
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use wasm_bindgen_test::*;
-
-    wasm_bindgen_test_configure!(run_in_browser);
-
-    fn mock_context() -> Option<CanvasRenderingContext2d> {
-        let document = web_sys::window()?.document()?;
-        let canvas = document
-            .create_element("canvas")
-            .ok()?
-            .dyn_into::<HtmlCanvasElement>()
-            .ok()?;
-        get_context(&canvas)
-    }
-
-    #[wasm_bindgen_test]
-    fn test_draw_radar_chart() {
-        let Some(context) = mock_context() else {
-            return;
-        };
-
-        let axes = vec![
-            "Speed".to_string(),
-            "Power".to_string(),
-            "Defense".to_string(),
-            "Agility".to_string(),
-            "Stamina".to_string(),
-        ];
-
-        let data = vec![
-            (
-                Series::new("Player A", "#4f46e5"),
-                vec![80.0, 65.0, 70.0, 90.0, 60.0],
-            ),
-            (
-                Series::new("Player B", "#e11d48"),
-                vec![60.0, 85.0, 75.0, 55.0, 80.0],
-            ),
-        ];
-
-        draw_radar_chart(
-            &context,
-            500.0,
-            500.0,
-            &data,
-            &axes,
-            &RadarChartConfig::default(),
-        );
-    }
-
-    #[wasm_bindgen_test]
-    fn test_draw_radar_chart_too_few_axes() {
-        let Some(context) = mock_context() else {
-            return;
-        };
-
-        let axes = vec!["A".to_string(), "B".to_string()];
-        let data = vec![(Series::new("X", "#4f46e5"), vec![1.0, 2.0])];
-
-        draw_radar_chart(
-            &context,
-            500.0,
-            500.0,
-            &data,
-            &axes,
-            &RadarChartConfig::default(),
-        );
-    }
-}
+#[path = "tests.rs"]
+mod tests;

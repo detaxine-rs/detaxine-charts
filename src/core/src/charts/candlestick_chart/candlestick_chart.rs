@@ -50,17 +50,37 @@ impl Candle {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct CandlePos {
     x: f64,
-    y: f64,
+    y: f64, // top of wick = to_y(high)
     width: f64,
-    height: f64,
+    height: f64,      // wick span = to_y(low) - to_y(high)
+    body_top: f64,    // to_y(open.max(close))
+    body_bottom: f64, // to_y(open.min(close))
     open: f64,
     high: f64,
     low: f64,
     close: f64,
     label: String,
+    is_bullish: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct GridLine {
+    y: f64,
+    value: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct CandleChartLayout {
+    candle_positions: Vec<CandlePos>,
+    grid_lines: Vec<GridLine>,
+    left_padding: f64,
+    axis_padding: f64,
+    slot_width: f64,
+    min_value: f64,
+    max_value: f64,
 }
 
 fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
@@ -91,7 +111,6 @@ pub fn CandlestickChart(
     let drag_start_x = StoredValue::new(0.0f64);
     let drag_start_view = StoredValue::new((0usize, 0usize));
 
-    // NEW — tracks which candle (by index in the visible slice) is currently hovered
     let hovered_index = RwSignal::new(None::<usize>);
     let mouse_x = StoredValue::new(0.0f64);
 
@@ -106,15 +125,9 @@ pub fn CandlestickChart(
         let Some(win) = window() else { return };
 
         let device_pixel_ratio = win.device_pixel_ratio();
-        let Some(parent) = canvas.parent_element() else {
+        let Some((width, height)) = canvas_dimensions(&canvas) else {
             return;
         };
-        let width = parent.client_width() as f64;
-        let height = width * 0.6;
-
-        if width < 1.0 || height < 1.0 {
-            return;
-        }
 
         canvas.set_width((width * device_pixel_ratio) as u32);
         canvas.set_height((height * device_pixel_ratio) as u32);
@@ -140,13 +153,13 @@ pub fn CandlestickChart(
             (start, end)
         };
 
-        let data_slice = all_data[start..end].to_vec();
+        let data_slice = &all_data[start..end];
         let config_val = config.get_value();
 
-        let candles = draw_candlestick_chart(&context, width, height, &data_slice, &config_val);
+        let candles = draw_candlestick_chart(&context, width, height, data_slice, &config_val);
         candle_positions.set_value(candles.clone());
 
-        // NEW — keep tooltip & crosshair in sync with fresh data while hovering
+        // Keep tooltip & crosshair in sync with fresh data while hovering
         if let Some(idx) = hovered_index.get_untracked() {
             if let Some(candle) = candles.get(idx) {
                 if let Some(tooltip) = tooltip_ref.get_untracked() {
@@ -158,13 +171,8 @@ pub fn CandlestickChart(
 
                     let canvas_width = canvas.client_width() as f64;
                     let tooltip_width = tooltip_el.offset_width() as f64;
-                    let gap = 10.0;
                     let cursor_x = mouse_x.get_value();
-                    let left = if cursor_x + gap + tooltip_width > canvas_width {
-                        (cursor_x - gap - tooltip_width).max(0.0)
-                    } else {
-                        cursor_x + gap
-                    };
+                    let left = tooltip_left(cursor_x, tooltip_width, canvas_width, 10.0);
                     let _ = tooltip_el
                         .style()
                         .set_property("left", &format!("{}px", left));
@@ -177,7 +185,6 @@ pub fn CandlestickChart(
                         .set_property("left", &format!("{}px", crosshair_x));
                 }
             } else {
-                // hovered candle fell out of view (e.g. window shrank) — hide
                 hovered_index.set(None);
                 if let Some(tooltip) = tooltip_ref.get_untracked() {
                     let _: HtmlElement = tooltip.into();
@@ -203,7 +210,7 @@ pub fn CandlestickChart(
         redraw();
     });
 
-    let redraw_for_observer = redraw.clone(); // redraw needs to be Fn, not FnOnce — see note below
+    let redraw_for_observer = redraw.clone();
     let UseResizeObserverReturn { stop, .. } =
         use_resize_observer(container_ref, move |_entries, _observer| {
             redraw_for_observer();
@@ -217,30 +224,26 @@ pub fn CandlestickChart(
 
         let rect = canvas.get_bounding_client_rect();
         let x = e.client_x() as f64 - rect.left();
-        let axis_padding = 60.0;
-        let chart_width = canvas.client_width() as f64 - axis_padding * 2.0;
 
         let total = data.get_untracked().unwrap_or_default().len();
         let start = view_start.get_untracked();
         let end = view_end.get_untracked();
-        let visible = end - start;
+        let delta_sign = e.delta_y().signum() as isize;
 
-        let mouse_ratio = ((x - axis_padding) / chart_width).clamp(0.0, 1.0);
-        let center = start + (mouse_ratio * visible as f64) as usize;
+        let Some((canvas_width, canvas_height)) = canvas_dimensions(&canvas) else {
+            return;
+        };
+        let (new_start, new_end) = compute_zoom(
+            x,
+            canvas_width,
+            canvas_height,
+            total,
+            start,
+            end,
+            delta_sign,
+        );
 
-        let delta_y = e.delta_y().signum() as isize;
-        let new_visible = ((visible as isize + delta_y).max(2) as usize).min(total);
-
-        let new_start = center.saturating_sub((mouse_ratio * new_visible as f64) as usize);
-        let new_end = (new_start + new_visible).min(total);
-        let new_start = new_end.saturating_sub(new_visible);
-
-        if new_end < total {
-            pinned_to_latest.set(false);
-        } else {
-            pinned_to_latest.set(true);
-        }
-
+        pinned_to_latest.set(new_end >= total);
         view_start.set(new_start);
         view_end.set(new_end);
         e.prevent_default();
@@ -277,32 +280,26 @@ pub fn CandlestickChart(
 
         if is_dragging.get_value() {
             let total = data.get_untracked().unwrap_or_default().len();
-            let axis_padding = 60.0;
-            let chart_width = canvas.client_width() as f64 - axis_padding * 2.0;
             let (drag_start, drag_end) = drag_start_view.get_value();
-            let visible = drag_end - drag_start;
-            let candle_width = chart_width / visible as f64;
-            let delta_candles = ((drag_start_x.get_value() - x) / candle_width).round() as isize;
 
-            let new_start =
-                (drag_start as isize + delta_candles).clamp(0, (total - visible) as isize) as usize;
-            let new_end = new_start + visible;
-
-            if new_end < total {
-                pinned_to_latest.set(false);
-            } else {
-                pinned_to_latest.set(true);
+            if let Some((width, height)) = canvas_dimensions(&canvas) {
+                let (new_start, new_end) = compute_pan(
+                    drag_start_x.get_value(),
+                    x,
+                    width,
+                    height,
+                    total,
+                    drag_start,
+                    drag_end,
+                );
+                pinned_to_latest.set(new_end >= total);
+                view_start.set(new_start);
+                view_end.set(new_end);
             }
-
-            view_start.set(new_start);
-            view_end.set(new_end);
         }
 
         let positions = candle_positions.get_value();
-        let hovered = positions
-            .iter()
-            .enumerate()
-            .find(|(_, c)| x >= c.x && x <= c.x + c.width);
+        let hovered = find_candle_at(&positions, x);
 
         let tooltip_el: HtmlElement = tooltip.into();
         let crosshair_el: HtmlElement = crosshair.into();
@@ -325,12 +322,7 @@ pub fn CandlestickChart(
 
             let tooltip_width = tooltip_el.offset_width() as f64;
             let canvas_width = canvas.client_width() as f64;
-            let gap = 10.0;
-            let left = if x + gap + tooltip_width > canvas_width {
-                (x - gap - tooltip_width).max(0.0)
-            } else {
-                x + gap
-            };
+            let left = tooltip_left(x, tooltip_width, canvas_width, 10.0);
             let _ = tooltip_style.set_property("left", &format!("{}px", left));
             let _ = tooltip_style.set_property("top", &format!("{}px", y - 28.0));
 
@@ -428,21 +420,30 @@ pub fn CandlestickChart(
     }
 }
 
-fn draw_candlestick_chart(
-    context: &CanvasRenderingContext2d,
-    width: f64,
-    height: f64,
-    data: &Vec<Candle>,
-    config: &CandlestickChartConfig,
-) -> Vec<CandlePos> {
-    if data.is_empty() {
-        return vec![];
-    };
+/// Dimensions the chart lays out against — must match what `redraw` uses,
+/// or interaction math (zoom pivot, drag sensitivity) drifts from the drawing.
+fn canvas_dimensions(canvas: &HtmlCanvasElement) -> Option<(f64, f64)> {
+    let parent = canvas.parent_element()?;
+    let width = parent.client_width() as f64;
+    let height = width * 0.6;
+    if width < 1.0 || height < 1.0 {
+        return None;
+    }
+    Some((width, height))
+}
 
+fn compute_paddings(width: f64, height: f64) -> (f64, f64) {
     let axis_padding = (height * 0.12).clamp(28.0, 60.0);
     let left_padding = (width * 0.1).clamp(40.0, 60.0);
-    let y_label_font_size = (height * 0.045).clamp(9.0, 12.0);
-    let x_label_font_size = (height * 0.04).clamp(8.0, 11.0);
+    (left_padding, axis_padding)
+}
+
+fn compute_candle_layout(width: f64, height: f64, data: &[Candle]) -> Option<CandleChartLayout> {
+    if data.is_empty() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+
+    let (left_padding, axis_padding) = compute_paddings(width, height);
 
     let candle_margin = 0.2;
 
@@ -455,8 +456,8 @@ fn draw_candlestick_chart(
     let value_range = max_value - min_value;
 
     if value_range == 0.0 {
-        return vec![];
-    };
+        return None;
+    }
 
     let chart_width = width - left_padding - axis_padding;
     let chart_height = height - axis_padding * 2.0;
@@ -467,11 +468,66 @@ fn draw_candlestick_chart(
         height - axis_padding - ((value - min_value) / value_range) * chart_height
     };
 
-    context.clear_rect(0.0, 0.0, width, height);
-
     let num_grid_lines = 5;
     let step_value = (max_value - min_value) / num_grid_lines as f64;
     let step_height = chart_height / num_grid_lines as f64;
+
+    let grid_lines = (0..=num_grid_lines)
+        .map(|i| GridLine {
+            y: height - axis_padding - i as f64 * step_height,
+            value: min_value + i as f64 * step_value,
+        })
+        .collect();
+
+    let candle_positions = data
+        .iter()
+        .enumerate()
+        .map(|(i, candle)| {
+            let slot_x = left_padding + i as f64 * slot_width;
+            let candle_x = slot_x + (slot_width - candle_width) / 2.0;
+            CandlePos {
+                x: candle_x,
+                y: to_y(candle.high),
+                width: candle_width,
+                height: to_y(candle.low) - to_y(candle.high),
+                body_top: to_y(candle.open.max(candle.close)),
+                body_bottom: to_y(candle.open.min(candle.close)),
+                open: candle.open,
+                high: candle.high,
+                low: candle.low,
+                close: candle.close,
+                label: candle.label.clone(),
+                is_bullish: candle.close >= candle.open,
+            }
+        })
+        .collect();
+
+    Some(CandleChartLayout {
+        candle_positions,
+        grid_lines,
+        left_padding,
+        axis_padding,
+        slot_width,
+        min_value,
+        max_value,
+    })
+}
+
+fn draw_candlestick_chart(
+    context: &CanvasRenderingContext2d,
+    width: f64,
+    height: f64,
+    data: &[Candle],
+    config: &CandlestickChartConfig,
+) -> Vec<CandlePos> {
+    let Some(layout) = compute_candle_layout(width, height, data) else {
+        return vec![];
+    };
+
+    let y_label_font_size = (height * 0.045).clamp(9.0, 12.0);
+    let x_label_font_size = (height * 0.04).clamp(8.0, 11.0);
+
+    context.clear_rect(0.0, 0.0, width, height);
 
     context.set_line_width(1.0);
     context.set_fill_style_str("black");
@@ -479,132 +535,145 @@ fn draw_candlestick_chart(
     context.set_text_baseline("middle");
     context.set_font(&format!("{}px Arial", y_label_font_size));
 
-    for i in 0..=num_grid_lines {
-        let y = height - axis_padding - i as f64 * step_height;
-        let label = min_value + i as f64 * step_value;
-
+    for line in &layout.grid_lines {
         if config.show_grid {
             context.set_stroke_style_str("#e5e7eb");
             context.begin_path();
-            context.move_to(left_padding, y);
-            context.line_to(width - axis_padding, y);
+            context.move_to(layout.left_padding, line.y);
+            context.line_to(width - layout.axis_padding, line.y);
             context.stroke();
         }
 
-        let _ = context.fill_text(&format!("{:.2}", label), left_padding - 8.0, y);
+        let _ = context.fill_text(
+            &format!("{:.2}", line.value),
+            layout.left_padding - 8.0,
+            line.y,
+        );
     }
 
     context.set_stroke_style_str("#e5e7eb");
     context.begin_path();
-    context.move_to(left_padding, height - axis_padding);
-    context.line_to(width - axis_padding, height - axis_padding);
+    context.move_to(layout.left_padding, height - layout.axis_padding);
+    context.line_to(width - layout.axis_padding, height - layout.axis_padding);
     context.stroke();
 
-    let mut candle_positions = Vec::new();
-
-    for (i, candle) in data.iter().enumerate() {
-        let slot_x = left_padding + i as f64 * slot_width;
-        let candle_x = slot_x + (slot_width - candle_width) / 2.0;
-        let wick_x = candle_x + candle_width / 2.0;
-
-        let is_bullish = candle.close >= candle.open;
-        let color = if is_bullish {
+    for pos in &layout.candle_positions {
+        let color = if pos.is_bullish {
             config.bullish_color.as_str()
         } else {
             config.bearish_color.as_str()
         };
-
-        let body_top = to_y(candle.open.max(candle.close));
-        let body_bottom = to_y(candle.open.min(candle.close));
-        let body_height = (body_bottom - body_top).max(1.0);
+        let wick_x = pos.x + pos.width / 2.0;
+        let body_height = (pos.body_bottom - pos.body_top).max(1.0);
 
         context.set_stroke_style_str(config.wick_color.as_str());
-        context.set_line_width(1.0_f64.min(candle_width));
+        context.set_line_width(1.0_f64.min(pos.width));
         context.begin_path();
-        context.move_to(wick_x, to_y(candle.high));
-        context.line_to(wick_x, body_top);
+        context.move_to(wick_x, pos.y);
+        context.line_to(wick_x, pos.body_top);
         context.stroke();
 
         context.begin_path();
-        context.move_to(wick_x, body_bottom);
-        context.line_to(wick_x, to_y(candle.low));
+        context.move_to(wick_x, pos.body_bottom);
+        context.line_to(wick_x, pos.y + pos.height);
         context.stroke();
 
-        if candle_width < 2.0 {
+        if pos.width < 2.0 {
             context.set_stroke_style_str(color);
-            context.set_line_width(candle_width);
+            context.set_line_width(pos.width);
             context.begin_path();
-            context.move_to(wick_x, body_top);
-            context.line_to(wick_x, body_bottom);
+            context.move_to(wick_x, pos.body_top);
+            context.line_to(wick_x, pos.body_bottom);
             context.stroke();
         } else {
             context.set_fill_style_str(color);
-            context.fill_rect(candle_x, body_top, candle_width, body_height);
+            context.fill_rect(pos.x, pos.body_top, pos.width, body_height);
             context.set_stroke_style_str(color);
             context.set_line_width(1.0);
-            context.stroke_rect(candle_x, body_top, candle_width, body_height);
+            context.stroke_rect(pos.x, pos.body_top, pos.width, body_height);
         }
 
-        if slot_width > 30.0 {
+        if layout.slot_width > 30.0 {
             context.set_fill_style_str("black");
             context.set_text_align("right");
             context.set_text_baseline("middle");
             context.set_font(&format!("{}px Arial", x_label_font_size));
             context.save();
-            let _ = context.translate(wick_x, height - axis_padding / 2.0);
+            let _ = context.translate(wick_x, height - layout.axis_padding / 2.0);
             let _ = context.rotate(-std::f64::consts::PI / 4.0);
-            let _ = context.fill_text(&candle.label, 0.0, 0.0);
+            let _ = context.fill_text(&pos.label, 0.0, 0.0);
             context.restore();
         }
-
-        candle_positions.push(CandlePos {
-            x: candle_x,
-            y: to_y(candle.high),
-            width: candle_width,
-            height: to_y(candle.low) - to_y(candle.high),
-            open: candle.open,
-            high: candle.high,
-            low: candle.low,
-            close: candle.close,
-            label: candle.label.clone(),
-        });
     }
 
-    candle_positions
+    layout.candle_positions
+}
+
+fn find_candle_at(positions: &[CandlePos], x: f64) -> Option<(usize, &CandlePos)> {
+    positions
+        .iter()
+        .enumerate()
+        .find(|(_, c)| x >= c.x && x <= c.x + c.width)
+}
+
+fn tooltip_left(x: f64, tooltip_width: f64, canvas_width: f64, gap: f64) -> f64 {
+    if x + gap + tooltip_width > canvas_width {
+        (x - gap - tooltip_width).max(0.0)
+    } else {
+        x + gap
+    }
+}
+
+fn compute_zoom(
+    x: f64,
+    canvas_width: f64,
+    canvas_height: f64,
+    total: usize,
+    start: usize,
+    end: usize,
+    delta_sign: isize,
+) -> (usize, usize) {
+    let (left_padding, right_padding) = compute_paddings(canvas_width, canvas_height);
+    let chart_width = canvas_width - left_padding - right_padding;
+    let visible = end.saturating_sub(start);
+
+    let mouse_ratio = ((x - left_padding) / chart_width).clamp(0.0, 1.0);
+    let center = start + (mouse_ratio * visible as f64) as usize;
+
+    let new_visible = ((visible as isize + delta_sign).max(2) as usize).min(total);
+
+    let new_start = center.saturating_sub((mouse_ratio * new_visible as f64) as usize);
+    let new_end = (new_start + new_visible).min(total);
+    let new_start = new_end.saturating_sub(new_visible);
+
+    (new_start, new_end)
+}
+
+fn compute_pan(
+    drag_start_x: f64,
+    current_x: f64,
+    canvas_width: f64,
+    canvas_height: f64,
+    total: usize,
+    drag_start: usize,
+    drag_end: usize,
+) -> (usize, usize) {
+    let visible = drag_end.saturating_sub(drag_start);
+    let (left_padding, right_padding) = compute_paddings(canvas_width, canvas_height);
+    let chart_width = canvas_width - left_padding - right_padding;
+    if visible == 0 || chart_width <= 0.0 {
+        return (drag_start, drag_end);
+    }
+
+    let candle_width = chart_width / visible as f64;
+    let delta_candles = ((drag_start_x - current_x) / candle_width).round() as isize;
+    let max_start = total.saturating_sub(visible);
+    let new_start = (drag_start as isize + delta_candles).clamp(0, max_start as isize) as usize;
+    let new_end = new_start + visible;
+
+    (new_start, new_end)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use wasm_bindgen_test::*;
-
-    wasm_bindgen_test_configure!(run_in_browser);
-
-    fn mock_context() -> Option<CanvasRenderingContext2d> {
-        let document = web_sys::window()?.document()?;
-        let canvas = document
-            .create_element("canvas")
-            .ok()?
-            .dyn_into::<HtmlCanvasElement>()
-            .ok()?;
-        get_context(&canvas)
-    }
-
-    #[wasm_bindgen_test]
-    fn test_draw_candlestick_chart() {
-        let Some(context) = mock_context() else {
-            return;
-        };
-
-        let data = vec![
-            Candle::new("Mon", 100.0, 115.0, 95.0, 110.0),
-            Candle::new("Tue", 110.0, 120.0, 105.0, 108.0),
-            Candle::new("Wed", 108.0, 112.0, 100.0, 102.0),
-            Candle::new("Thu", 102.0, 118.0, 101.0, 115.0),
-            Candle::new("Fri", 115.0, 125.0, 113.0, 120.0),
-        ];
-        let config = CandlestickChartConfig::default();
-
-        draw_candlestick_chart(&context, 800.0, 480.0, &data, &config);
-    }
-}
+#[path = "tests.rs"]
+mod tests;
