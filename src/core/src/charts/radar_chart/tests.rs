@@ -222,7 +222,7 @@ fn axis_labels_placed_outside_max_radius() {
         let dist = (dx * dx + dy * dy).sqrt();
         assert!(dist > layout.max_radius);
         // And roughly along the spoke angle
-        assert!((dx.atan2(dy) - angle.sin().atan2(angle.cos())).abs() < 0.2);
+        assert!((dy.atan2(dx) - angle.sin().atan2(angle.cos())).abs() < 0.2);
     }
 }
 
