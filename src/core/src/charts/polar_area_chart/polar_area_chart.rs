@@ -4,6 +4,7 @@ use leptos::{
     prelude::*,
 };
 use leptos_use::{UseResizeObserverReturn, use_resize_observer};
+use std::f64::consts::PI;
 use web_sys::{
     CanvasRenderingContext2d, HtmlCanvasElement, HtmlElement, wasm_bindgen::JsCast, window,
 };
@@ -17,9 +18,6 @@ pub struct PolarAreaChartConfig {
     pub num_grid_rings: usize,
     pub grid_color: String,
     pub label_color: String,
-    /// Opacity applied to each slice's fill, from 0.0 (fully transparent)
-    /// to 1.0 (fully opaque). Slightly transparent fills make overlapping
-    /// gridlines and the segment outlines easier to see.
     pub fill_opacity: f64,
 }
 
@@ -53,7 +51,7 @@ impl DataPoint {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct SlicePos {
     start_angle: f64,
     end_angle: f64,
@@ -64,6 +62,23 @@ struct SlicePos {
     value: f64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct GridRing {
+    radius: f64,
+    value: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PolarLayout {
+    slices: Vec<SlicePos>,
+    grid_rings: Vec<GridRing>,
+    center_x: f64,
+    center_y: f64,
+    max_radius: f64,
+    max_value: f64,
+    label_font_size: f64,
+}
+
 fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
     canvas
         .get_context("2d")
@@ -72,19 +87,27 @@ fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
         .ok()
 }
 
-/// Applies an alpha channel to a hex color string (e.g. "#4f46e5" + 0.85
-/// becomes "#4f46e5d9"), used to fade slice fills without needing the
-/// caller to pre-format colors with alpha themselves.
 fn with_alpha(hex_color: &str, opacity: f64) -> String {
     let alpha_byte = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("{}{:02x}", hex_color, alpha_byte)
 }
 
+fn normalize_angle(angle: f64, min: f64) -> f64 {
+    if angle < min { angle + 2.0 * PI } else { angle }
+}
+
+fn angle_in_slice(angle: f64, start: f64, end: f64) -> bool {
+    if start <= end {
+        angle >= start && angle <= end
+    } else {
+        // slice wraps across the 0/2π boundary (e.g. crosses 3 o'clock)
+        angle >= start || angle <= end
+    }
+}
+
 #[component]
 pub fn PolarAreaChart(
-    /// Accepts a reactive signal — update data and the chart redraws automatically.
-    #[prop(into)]
-    data: MaybeProp<Vec<DataPoint>>,
+    #[prop(into)] data: MaybeProp<Vec<DataPoint>>,
     #[prop(optional, default = Default::default())] config: PolarAreaChartConfig,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
@@ -147,11 +170,11 @@ pub fn PolarAreaChart(
     };
 
     Effect::new(move |_| {
-        let _ = data.get(); // tracked
+        let _ = data.get();
         redraw();
     });
 
-    let redraw_for_observer = redraw.clone(); // redraw needs to be Fn, not FnOnce — see note below
+    let redraw_for_observer = redraw.clone();
     let UseResizeObserverReturn { stop, .. } =
         use_resize_observer(container_ref, move |_entries, _observer| {
             redraw_for_observer();
@@ -170,27 +193,8 @@ pub fn PolarAreaChart(
         let x = e.client_x() as f64 - rect.left();
         let y = e.client_y() as f64 - rect.top();
 
-        let hovered = slice_positions.get_value().into_iter().find(|s| {
-            let dx = x - s.center_x;
-            let dy = y - s.center_y;
-            let dist = (dx * dx + dy * dy).sqrt();
-
-            if dist > s.slice_radius {
-                return false;
-            }
-
-            let mut angle = dy.atan2(dx);
-            if angle < 0.0 {
-                angle += 2.0 * std::f64::consts::PI;
-            }
-
-            if s.start_angle <= s.end_angle {
-                angle >= s.start_angle && angle <= s.end_angle
-            } else {
-                // slice wraps across the 0/2π boundary (e.g. crosses 3 o'clock)
-                angle >= s.start_angle || angle <= s.end_angle
-            }
-        });
+        let slices = slice_positions.get_value();
+        let hovered = find_slice_at(&slices, x, y);
 
         let tooltip_el: HtmlElement = tooltip.into();
         let style = tooltip_el.style();
@@ -204,12 +208,7 @@ pub fn PolarAreaChart(
 
             let tooltip_width = tooltip_el.offset_width() as f64;
             let canvas_width = canvas.client_width() as f64;
-            let gap = 10.0;
-            let left = if x + gap + tooltip_width > canvas_width {
-                (x - gap - tooltip_width).max(0.0)
-            } else {
-                x + gap
-            };
+            let left = tooltip_left(x, tooltip_width, canvas_width, 10.0);
 
             let _ = style.set_property("left", &format!("{}px", left));
             let _ = style.set_property("top", &format!("{}px", y - 28.0));
@@ -267,108 +266,45 @@ pub fn PolarAreaChart(
     }
 }
 
-fn draw_polar_area_chart(
-    context: &CanvasRenderingContext2d,
+fn compute_polar_layout(
     width: f64,
     height: f64,
     data: &[DataPoint],
     config: &PolarAreaChartConfig,
-) -> Vec<SlicePos> {
-    if data.is_empty() {
-        return vec![];
-    };
+) -> Option<PolarLayout> {
+    if data.is_empty() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
 
     let label_margin = (height.min(width) * 0.12).clamp(20.0, 40.0);
     let center_x = width / 2.0;
     let center_y = height / 2.0;
     let max_radius = (width.min(height) / 2.0 - label_margin).max(10.0);
 
-    let Some(max_value) = data.iter().map(|d| d.value).reduce(f64::max) else {
-        return vec![];
-    };
+    let max_value = data.iter().map(|d| d.value).reduce(f64::max)?;
     if max_value <= 0.0 {
-        return vec![];
-    }
-
-    context.clear_rect(0.0, 0.0, width, height);
-
-    // grid rings — concentric circles giving a visual reference for
-    // how each slice's radius maps back to a value
-    if config.show_grid {
-        let num_rings = config.num_grid_rings.max(1);
-        context.set_stroke_style_str(&config.grid_color);
-        context.set_line_width(1.0);
-
-        for i in 1..=num_rings {
-            let ring_radius = max_radius * (i as f64 / num_rings as f64);
-            context.begin_path();
-            let _ = context.arc(
-                center_x,
-                center_y,
-                ring_radius,
-                0.0,
-                2.0 * std::f64::consts::PI,
-            );
-            context.stroke();
-        }
-
-        // ring value labels, placed along a fixed vertical axis above center
-        let label_font_size = (max_radius * 0.08).clamp(8.0, 11.0);
-        context.set_fill_style_str(&config.label_color);
-        context.set_font(&format!("{}px Arial", label_font_size));
-        context.set_text_align("center");
-        context.set_text_baseline("middle");
-        for i in 1..=num_rings {
-            let ring_radius = max_radius * (i as f64 / num_rings as f64);
-            let ring_value = max_value * (i as f64 / num_rings as f64);
-            let _ = context.fill_text(
-                &format_with_commas(ring_value, Some(0)),
-                center_x,
-                center_y - ring_radius,
-            );
-        }
+        return None;
     }
 
     let num_slices = data.len();
-    let slice_angle = 2.0 * std::f64::consts::PI / num_slices as f64;
-    let gap = (slice_angle * 0.04).min(0.04); // small visual gap between adjacent slices
+    let slice_angle = 2.0 * PI / num_slices as f64;
+    let gap = (slice_angle * 0.04).min(0.04);
 
-    let mut slice_positions = Vec::new();
-
+    let mut slices = Vec::with_capacity(num_slices);
     for (i, point) in data.iter().enumerate() {
-        let raw_start = -std::f64::consts::PI / 2.0 + i as f64 * slice_angle;
+        let raw_start = -PI / 2.0 + i as f64 * slice_angle;
         let raw_end = raw_start + slice_angle;
-        let start_angle = raw_start + gap / 2.0;
-        let end_angle = raw_end - gap / 2.0;
+        let start_angle = normalize_angle(raw_start + gap / 2.0, 0.0);
+        let end_angle = normalize_angle(raw_end - gap / 2.0, 0.0);
 
-        // square-root scaling — radius represents the value, but since a
-        // slice's visual area grows with radius squared, scaling radius
-        // linearly with value would make larger values look exaggerated
+        // square-root scaling — a slice's visual area grows with radius squared,
+        // so scaling radius linearly with value would exaggerate larger values
         let ratio = (point.value.max(0.0) / max_value).sqrt();
         let slice_radius = max_radius * ratio;
 
-        context.set_fill_style_str(&with_alpha(&point.color, config.fill_opacity));
-        context.begin_path();
-        context.move_to(center_x, center_y);
-        let _ = context.arc(center_x, center_y, slice_radius, start_angle, end_angle);
-        context.close_path();
-        context.fill();
-
-        context.set_stroke_style_str(&point.color);
-        context.set_line_width(1.5);
-        context.stroke();
-
-        slice_positions.push(SlicePos {
-            start_angle: if start_angle < 0.0 {
-                start_angle + 2.0 * std::f64::consts::PI
-            } else {
-                start_angle
-            },
-            end_angle: if end_angle < 0.0 {
-                end_angle + 2.0 * std::f64::consts::PI
-            } else {
-                end_angle
-            },
+        slices.push(SlicePos {
+            start_angle,
+            end_angle,
             slice_radius,
             center_x,
             center_y,
@@ -377,61 +313,109 @@ fn draw_polar_area_chart(
         });
     }
 
-    slice_positions
+    let num_rings = config.num_grid_rings.max(1);
+    let grid_rings: Vec<GridRing> = (1..=num_rings)
+        .map(|i| GridRing {
+            radius: max_radius * (i as f64 / num_rings as f64),
+            value: max_value * (i as f64 / num_rings as f64),
+        })
+        .collect();
+
+    let label_font_size = (max_radius * 0.08).clamp(8.0, 11.0);
+
+    Some(PolarLayout {
+        slices,
+        grid_rings,
+        center_x,
+        center_y,
+        max_radius,
+        max_value,
+        label_font_size,
+    })
+}
+
+fn draw_polar_area_chart(
+    context: &CanvasRenderingContext2d,
+    width: f64,
+    height: f64,
+    data: &[DataPoint],
+    config: &PolarAreaChartConfig,
+) -> Vec<SlicePos> {
+    let Some(layout) = compute_polar_layout(width, height, data, config) else {
+        return vec![];
+    };
+
+    context.clear_rect(0.0, 0.0, width, height);
+
+    if config.show_grid {
+        context.set_stroke_style_str(&config.grid_color);
+        context.set_line_width(1.0);
+        for ring in &layout.grid_rings {
+            context.begin_path();
+            let _ = context.arc(layout.center_x, layout.center_y, ring.radius, 0.0, 2.0 * PI);
+            context.stroke();
+        }
+
+        context.set_fill_style_str(&config.label_color);
+        context.set_font(&format!("{}px Arial", layout.label_font_size));
+        context.set_text_align("center");
+        context.set_text_baseline("middle");
+        for ring in &layout.grid_rings {
+            let _ = context.fill_text(
+                &format_with_commas(ring.value, Some(0)),
+                layout.center_x,
+                layout.center_y - ring.radius,
+            );
+        }
+    }
+
+    for (i, slice) in layout.slices.iter().enumerate() {
+        // color comes from the caller's data (layout doesn't carry it);
+        // safe today because slices is built 1:1 from data by index.
+        let color = &data[i].color;
+
+        context.set_fill_style_str(&with_alpha(color, config.fill_opacity));
+        context.begin_path();
+        context.move_to(layout.center_x, layout.center_y);
+        let _ = context.arc(
+            layout.center_x,
+            layout.center_y,
+            slice.slice_radius,
+            slice.start_angle,
+            slice.end_angle,
+        );
+        context.close_path();
+        context.fill();
+
+        context.set_stroke_style_str(color);
+        context.set_line_width(1.5);
+        context.stroke();
+    }
+
+    layout.slices
+}
+
+fn find_slice_at<'a>(slices: &'a [SlicePos], x: f64, y: f64) -> Option<&'a SlicePos> {
+    slices.iter().find(|s| {
+        let dx = x - s.center_x;
+        let dy = y - s.center_y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist > s.slice_radius {
+            return false;
+        }
+        let angle = normalize_angle(dy.atan2(dx), 0.0);
+        angle_in_slice(angle, s.start_angle, s.end_angle)
+    })
+}
+
+fn tooltip_left(x: f64, tooltip_width: f64, canvas_width: f64, gap: f64) -> f64 {
+    if x + gap + tooltip_width > canvas_width {
+        (x - gap - tooltip_width).max(0.0)
+    } else {
+        x + gap
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use wasm_bindgen_test::*;
-
-    wasm_bindgen_test_configure!(run_in_browser);
-
-    fn mock_context() -> Option<CanvasRenderingContext2d> {
-        let document = web_sys::window()?.document()?;
-        let canvas = document
-            .create_element("canvas")
-            .ok()?
-            .dyn_into::<HtmlCanvasElement>()
-            .ok()?;
-        get_context(&canvas)
-    }
-
-    #[wasm_bindgen_test]
-    fn test_draw_polar_area_chart() {
-        let Some(context) = mock_context() else {
-            return;
-        };
-
-        let data = vec![
-            DataPoint::new("Mon", 12.0, "#4f46e5"),
-            DataPoint::new("Tue", 19.0, "#e11d48"),
-            DataPoint::new("Wed", 7.0, "#0891b2"),
-            DataPoint::new("Thu", 15.0, "#16a34a"),
-            DataPoint::new("Fri", 22.0, "#d97706"),
-        ];
-
-        draw_polar_area_chart(
-            &context,
-            500.0,
-            500.0,
-            &data,
-            &PolarAreaChartConfig::default(),
-        );
-    }
-
-    #[wasm_bindgen_test]
-    fn test_draw_polar_area_chart_empty() {
-        let Some(context) = mock_context() else {
-            return;
-        };
-
-        draw_polar_area_chart(
-            &context,
-            500.0,
-            500.0,
-            &[],
-            &PolarAreaChartConfig::default(),
-        );
-    }
-}
+#[path = "tests.rs"]
+mod tests;

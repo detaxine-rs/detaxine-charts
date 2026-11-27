@@ -3,6 +3,7 @@ use leptos::{
     prelude::*,
 };
 use leptos_use::{UseResizeObserverReturn, use_resize_observer};
+use std::f64::consts::PI;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, wasm_bindgen::JsCast, window};
 
 use crate::utils::number_format::format_with_commas;
@@ -30,30 +31,18 @@ impl GaugeZone {
 pub struct GaugeChartConfig {
     pub min: f64,
     pub max: f64,
-    /// Total arc sweep in degrees, centered at the top (12 o'clock).
-    /// 180.0 gives a classic half-circle; 270.0 (the default) gives the
-    /// wider speedometer/credit-score style with an open gap at the bottom.
     pub sweep_degrees: f64,
-    /// Colored bands. When empty, the gauge renders as a single-color
-    /// progress arc instead.
     pub zones: Vec<GaugeZone>,
-    /// Visual gap between adjacent zones, in degrees.
     pub zone_gap_degrees: f64,
     pub track_color: String,
     pub progress_color: String,
     pub needle_color: String,
-    /// Width of the needle's base, in pixels. The needle tapers from this
-    /// width down to a point at the tip.
     pub needle_base_width: f64,
     pub arc_thickness: f64,
     pub show_value: bool,
-    /// Overrides the auto-detected zone color for the value text.
     pub value_color: Option<String>,
     pub pivot_border_color: String,
     pub unit: String,
-    /// Static label shown under the value (e.g. "Credit Score"). If left
-    /// empty and zones are configured, the currently active zone's label
-    /// (e.g. "EXCELLENT") is shown instead.
     pub label: String,
 }
 
@@ -79,6 +68,41 @@ impl Default for GaugeChartConfig {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct ZoneArc {
+    start_angle: f64,
+    end_angle: f64,
+    is_first: bool,
+    is_last: bool,
+    color: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct NeedleTriangle {
+    tip: (f64, f64),
+    base_left: (f64, f64),
+    base_right: (f64, f64),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct GaugeLayout {
+    clamped_value: f64,
+    start_angle: f64,
+    end_angle: f64,
+    value_angle: f64,
+    center_x: f64,
+    center_y: f64,
+    radius: f64,
+    pivot_radius: f64,
+    value_font_size: f64,
+    label_font_size: f64,
+    needle: NeedleTriangle,
+    zone_arcs: Vec<ZoneArc>,
+    use_zone_style: bool,
+    active_color: String,
+    display_label: Option<String>,
+}
+
 fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
     canvas
         .get_context("2d")
@@ -87,8 +111,6 @@ fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
         .ok()
 }
 
-/// Maps a value within [min, max] to an angle along the gauge sweep,
-/// which is always centered on the top (12 o'clock, angle `3*PI/2`).
 fn value_to_angle(value: f64, min: f64, max: f64, start_angle: f64, end_angle: f64) -> f64 {
     let range = (max - min).max(f64::EPSILON);
     let ratio = ((value - min) / range).clamp(0.0, 1.0);
@@ -99,9 +121,6 @@ fn find_active_zone(value: f64, zones: &[GaugeZone]) -> Option<&GaugeZone> {
     zones.iter().find(|z| value >= z.from && value <= z.to)
 }
 
-/// Samples the angle range to find the bounding box multipliers
-/// (min/max cos and sin) so the gauge can be sized to fit any sweep,
-/// including sweeps wider than 180° that dip below the horizontal.
 fn angle_extent(start: f64, end: f64) -> (f64, f64, f64, f64) {
     let samples = 180;
     let mut min_cos = start.cos().min(end.cos());
@@ -122,9 +141,7 @@ fn angle_extent(start: f64, end: f64) -> (f64, f64, f64, f64) {
 
 #[component]
 pub fn GaugeChart(
-    /// Accepts a reactive signal — update the value and the needle redraws to match.
-    #[prop(into)]
-    value: MaybeProp<f64>,
+    #[prop(into)] value: MaybeProp<f64>,
     #[prop(optional, default = Default::default())] config: GaugeChartConfig,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
@@ -170,11 +187,11 @@ pub fn GaugeChart(
     };
 
     Effect::new(move |_| {
-        let _ = value.get(); // tracked
+        let _ = value.get();
         redraw();
     });
 
-    let redraw_for_observer = redraw.clone(); // redraw needs to be Fn, not FnOnce — see note below
+    let redraw_for_observer = redraw.clone();
     let UseResizeObserverReturn { stop, .. } =
         use_resize_observer(container_ref, move |_entries, _observer| {
             redraw_for_observer();
@@ -191,22 +208,70 @@ pub fn GaugeChart(
     }
 }
 
-fn draw_gauge_chart(
-    context: &CanvasRenderingContext2d,
+fn compute_zone_arcs(config: &GaugeChartConfig, start_angle: f64, end_angle: f64) -> Vec<ZoneArc> {
+    let gap = config.zone_gap_degrees.to_radians();
+    let zone_count = config.zones.len();
+    let mut result = Vec::new();
+
+    for (i, zone) in config.zones.iter().enumerate() {
+        let from = zone.from.clamp(config.min, config.max);
+        let to = zone.to.clamp(config.min, config.max);
+        if to <= from {
+            continue;
+        }
+
+        let is_first = i == 0;
+        let is_last = i == zone_count - 1;
+
+        let zone_start_raw = value_to_angle(from, config.min, config.max, start_angle, end_angle);
+        let zone_end_raw = value_to_angle(to, config.min, config.max, start_angle, end_angle);
+
+        let zone_start = if is_first {
+            zone_start_raw
+        } else {
+            zone_start_raw + gap / 2.0
+        };
+        let zone_end = if is_last {
+            zone_end_raw
+        } else {
+            zone_end_raw - gap / 2.0
+        };
+
+        if zone_end <= zone_start {
+            continue;
+        }
+
+        result.push(ZoneArc {
+            start_angle: zone_start,
+            end_angle: zone_end,
+            is_first,
+            is_last,
+            color: zone.color.clone(),
+        });
+    }
+
+    result
+}
+
+fn compute_gauge_layout(
     width: f64,
     height: f64,
     value: f64,
     config: &GaugeChartConfig,
-) {
+) -> Option<GaugeLayout> {
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+
     let clamped_value = value.clamp(config.min, config.max);
 
-    let mid_angle = 3.0 * std::f64::consts::PI / 2.0; // 12 o'clock, fixed center of the sweep
+    let mid_angle = 3.0 * PI / 2.0;
     let half_sweep = config.sweep_degrees.to_radians() / 2.0;
     let start_angle = mid_angle - half_sweep;
     let end_angle = mid_angle + half_sweep;
 
     let label_margin = 26.0;
-    let value_text_reserve = 56.0; // accommodates the largest realistic pivot+label size
+    let value_text_reserve = 56.0;
 
     let (min_cos, max_cos, min_sin, max_sin) = angle_extent(start_angle, end_angle);
 
@@ -218,165 +283,47 @@ fn draw_gauge_chart(
     let center_x = width / 2.0;
     let center_y = label_margin - radius * min_sin;
 
-    context.clear_rect(0.0, 0.0, width, height);
-    context.set_line_width(config.arc_thickness);
-
-    if config.zones.is_empty() {
-        // progress style — track plus single-color fill up to the value,
-        // rounded at both true ends since there are no internal seams
-        context.set_line_cap("round");
-        context.set_stroke_style_str(&config.track_color);
-        context.begin_path();
-        let _ = context.arc(center_x, center_y, radius, start_angle, end_angle);
-        context.stroke();
-
-        let value_angle = value_to_angle(
-            clamped_value,
-            config.min,
-            config.max,
-            start_angle,
-            end_angle,
-        );
-        context.set_stroke_style_str(&config.progress_color);
-        context.begin_path();
-        let _ = context.arc(center_x, center_y, radius, start_angle, value_angle);
-        context.stroke();
-    } else {
-        // zone style — colored bands with a small gap between each.
-        // Every zone is stroked with a sharp "butt" cap; a separate tiny
-        // rounded stroke is added only at the two true outer ends of the
-        // whole sweep, since canvas can't apply different caps to each
-        // end of a single stroke.
-        let gap = config.zone_gap_degrees.to_radians();
-        let zone_count = config.zones.len();
-        let cap_angle = 0.001; // just enough angle to render a round cap, not a visible arc
-
-        for (i, zone) in config.zones.iter().enumerate() {
-            let from = zone.from.clamp(config.min, config.max);
-            let to = zone.to.clamp(config.min, config.max);
-            if to <= from {
-                continue;
-            }
-
-            let is_first = i == 0;
-            let is_last = i == zone_count - 1;
-
-            let zone_start_raw =
-                value_to_angle(from, config.min, config.max, start_angle, end_angle);
-            let zone_end_raw = value_to_angle(to, config.min, config.max, start_angle, end_angle);
-
-            let zone_start = if is_first {
-                zone_start_raw
-            } else {
-                zone_start_raw + gap / 2.0
-            };
-            let zone_end = if is_last {
-                zone_end_raw
-            } else {
-                zone_end_raw - gap / 2.0
-            };
-
-            if zone_end <= zone_start {
-                continue;
-            }
-
-            context.set_stroke_style_str(&zone.color);
-
-            // main band — sharp butt cap on both ends
-            context.set_line_cap("butt");
-            context.begin_path();
-            let _ = context.arc(center_x, center_y, radius, zone_start, zone_end);
-            context.stroke();
-
-            // round cap added only at the gauge's true start
-            if is_first {
-                context.set_line_cap("round");
-                context.begin_path();
-                let _ = context.arc(
-                    center_x,
-                    center_y,
-                    radius,
-                    zone_start,
-                    zone_start + cap_angle,
-                );
-                context.stroke();
-            }
-
-            // round cap added only at the gauge's true end
-            if is_last {
-                context.set_line_cap("round");
-                context.begin_path();
-                let _ = context.arc(center_x, center_y, radius, zone_end - cap_angle, zone_end);
-                context.stroke();
-            }
-        }
-    }
-
-    // pivot circle sized relative to the gauge radius so it scales on small screens
     let pivot_radius = (radius * 0.35).clamp(20.0, 70.0);
     let value_font_size = (pivot_radius * 0.55).max(11.0);
     let label_font_size = (pivot_radius * 0.32).max(8.0);
 
-    // needle — a narrow triangle that starts from the edge of the pivot
-    // circle (rather than its center) and points out to the arc, so the
-    // pivot circle reads as the axis the needle rotates around
-    let needle_angle = value_to_angle(
+    let value_angle = value_to_angle(
         clamped_value,
         config.min,
         config.max,
         start_angle,
         end_angle,
     );
+
     let needle_start = pivot_radius;
     let needle_end = radius - config.arc_thickness - 4.0;
-    let perp_angle = needle_angle + std::f64::consts::PI / 2.0;
+    let perp_angle = value_angle + PI / 2.0;
     let half_base = config.needle_base_width / 2.0;
 
-    let tip_x = center_x + needle_end * needle_angle.cos();
-    let tip_y = center_y + needle_end * needle_angle.sin();
-    let base_center_x = center_x + needle_start * needle_angle.cos();
-    let base_center_y = center_y + needle_start * needle_angle.sin();
-    let base_left_x = base_center_x + half_base * perp_angle.cos();
-    let base_left_y = base_center_y + half_base * perp_angle.sin();
-    let base_right_x = base_center_x - half_base * perp_angle.cos();
-    let base_right_y = base_center_y - half_base * perp_angle.sin();
-
-    context.set_fill_style_str(&config.needle_color);
-    context.begin_path();
-    context.move_to(tip_x, tip_y);
-    context.line_to(base_left_x, base_left_y);
-    context.line_to(base_right_x, base_right_y);
-    context.close_path();
-    context.fill();
-
-    // pivot circle — thin outlined ring the needle visually rotates around,
-    // drawn after the needle so it cleanly covers the needle's wide base
-    context.set_fill_style_str("white");
-    context.begin_path();
-    let _ = context.arc(
-        center_x,
-        center_y,
-        pivot_radius,
-        0.0,
-        2.0 * std::f64::consts::PI,
+    let tip = (
+        center_x + needle_end * value_angle.cos(),
+        center_y + needle_end * value_angle.sin(),
     );
-    context.fill();
-
-    context.set_stroke_style_str(&config.pivot_border_color);
-    context.set_line_width(1.5);
-    context.begin_path();
-    let _ = context.arc(
-        center_x,
-        center_y,
-        pivot_radius,
-        0.0,
-        2.0 * std::f64::consts::PI,
+    let base_center_x = center_x + needle_start * value_angle.cos();
+    let base_center_y = center_y + needle_start * value_angle.sin();
+    let base_left = (
+        base_center_x + half_base * perp_angle.cos(),
+        base_center_y + half_base * perp_angle.sin(),
     );
-    context.stroke();
+    let base_right = (
+        base_center_x - half_base * perp_angle.cos(),
+        base_center_y - half_base * perp_angle.sin(),
+    );
 
-    // resolve which color and label to show: an explicit override takes
-    // precedence, otherwise fall back to the active zone, otherwise the
-    // plain progress color and the static config label
+    let needle = NeedleTriangle {
+        tip,
+        base_left,
+        base_right,
+    };
+
+    let zone_arcs = compute_zone_arcs(config, start_angle, end_angle);
+    let use_zone_style = !config.zones.is_empty();
+
     let active_zone = find_active_zone(clamped_value, &config.zones);
     let active_color = active_zone
         .map(|z| z.color.clone())
@@ -389,112 +336,172 @@ fn draw_gauge_chart(
         active_zone.and_then(|z| z.label.clone())
     };
 
+    Some(GaugeLayout {
+        clamped_value,
+        start_angle,
+        end_angle,
+        value_angle,
+        center_x,
+        center_y,
+        radius,
+        pivot_radius,
+        value_font_size,
+        label_font_size,
+        needle,
+        zone_arcs,
+        use_zone_style,
+        active_color,
+        display_label,
+    })
+}
+
+fn draw_gauge_chart(
+    context: &CanvasRenderingContext2d,
+    width: f64,
+    height: f64,
+    value: f64,
+    config: &GaugeChartConfig,
+) {
+    let Some(layout) = compute_gauge_layout(width, height, value, config) else {
+        return;
+    };
+
+    context.clear_rect(0.0, 0.0, width, height);
+    context.set_line_width(config.arc_thickness);
+
+    if layout.use_zone_style {
+        let cap_angle = 0.001;
+        for arc in &layout.zone_arcs {
+            context.set_stroke_style_str(&arc.color);
+            context.set_line_cap("butt");
+            context.begin_path();
+            let _ = context.arc(
+                layout.center_x,
+                layout.center_y,
+                layout.radius,
+                arc.start_angle,
+                arc.end_angle,
+            );
+            context.stroke();
+
+            if arc.is_first {
+                context.set_line_cap("round");
+                context.begin_path();
+                let _ = context.arc(
+                    layout.center_x,
+                    layout.center_y,
+                    layout.radius,
+                    arc.start_angle,
+                    arc.start_angle + cap_angle,
+                );
+                context.stroke();
+            }
+
+            if arc.is_last {
+                context.set_line_cap("round");
+                context.begin_path();
+                let _ = context.arc(
+                    layout.center_x,
+                    layout.center_y,
+                    layout.radius,
+                    arc.end_angle - cap_angle,
+                    arc.end_angle,
+                );
+                context.stroke();
+            }
+        }
+    } else {
+        context.set_line_cap("round");
+        context.set_stroke_style_str(&config.track_color);
+        context.begin_path();
+        let _ = context.arc(
+            layout.center_x,
+            layout.center_y,
+            layout.radius,
+            layout.start_angle,
+            layout.end_angle,
+        );
+        context.stroke();
+
+        context.set_stroke_style_str(&config.progress_color);
+        context.begin_path();
+        let _ = context.arc(
+            layout.center_x,
+            layout.center_y,
+            layout.radius,
+            layout.start_angle,
+            layout.value_angle,
+        );
+        context.stroke();
+    }
+
+    // needle
+    context.set_fill_style_str(&config.needle_color);
+    context.begin_path();
+    context.move_to(layout.needle.tip.0, layout.needle.tip.1);
+    context.line_to(layout.needle.base_left.0, layout.needle.base_left.1);
+    context.line_to(layout.needle.base_right.0, layout.needle.base_right.1);
+    context.close_path();
+    context.fill();
+
+    // pivot fill
+    context.set_fill_style_str("white");
+    context.begin_path();
+    let _ = context.arc(
+        layout.center_x,
+        layout.center_y,
+        layout.pivot_radius,
+        0.0,
+        2.0 * PI,
+    );
+    context.fill();
+
+    // pivot outline
+    context.set_stroke_style_str(&config.pivot_border_color);
+    context.set_line_width(1.5);
+    context.begin_path();
+    let _ = context.arc(
+        layout.center_x,
+        layout.center_y,
+        layout.pivot_radius,
+        0.0,
+        2.0 * PI,
+    );
+    context.stroke();
+
     if config.show_value {
-        context.set_fill_style_str(&active_color);
+        context.set_fill_style_str(&layout.active_color);
         context.set_text_align("center");
         context.set_text_baseline("middle");
-        context.set_font(&format!("bold {}px Arial", value_font_size));
+        context.set_font(&format!("bold {}px Arial", layout.value_font_size));
 
         let value_text = if config.unit.is_empty() {
-            format_with_commas(clamped_value, Some(0))
+            format_with_commas(layout.clamped_value, Some(0))
         } else {
             format!(
                 "{} {}",
-                format_with_commas(clamped_value, Some(0)),
+                format_with_commas(layout.clamped_value, Some(0)),
                 config.unit
             )
         };
-        let _ = context.fill_text(&value_text, center_x, center_y);
+        let _ = context.fill_text(&value_text, layout.center_x, layout.center_y);
     }
 
     if config.show_value {
-        if let Some(label) = display_label {
-            context.set_font(&format!("{}px Arial", label_font_size));
-            context.set_fill_style_str(&active_color);
+        if let Some(label) = &layout.display_label {
+            context.set_font(&format!("{}px Arial", layout.label_font_size));
+            context.set_fill_style_str(&layout.active_color);
             context.set_text_align("center");
             context.set_text_baseline("middle");
             let _ = context.fill_text(
-                &label,
-                center_x,
-                center_y + pivot_radius + label_font_size + 4.0,
+                label,
+                layout.center_x,
+                layout.center_y + layout.pivot_radius + layout.label_font_size + 4.0,
             );
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use wasm_bindgen_test::*;
-
-    wasm_bindgen_test_configure!(run_in_browser);
-
-    fn mock_context() -> Option<CanvasRenderingContext2d> {
-        let document = web_sys::window()?.document()?;
-        let canvas = document
-            .create_element("canvas")
-            .ok()?
-            .dyn_into::<HtmlCanvasElement>()
-            .ok()?;
-        get_context(&canvas)
-    }
-
-    #[wasm_bindgen_test]
-    fn test_draw_gauge_chart_credit_score_style() {
-        let Some(context) = mock_context() else {
-            return;
-        };
-
-        let config = GaugeChartConfig {
-            min: 300.0,
-            max: 850.0,
-            zones: vec![
-                GaugeZone::new(300.0, 579.0, "#e11d48", "VERY POOR"),
-                GaugeZone::new(579.0, 669.0, "#d97706", "POOR"),
-                GaugeZone::new(669.0, 739.0, "#eab308", "FAIR"),
-                GaugeZone::new(739.0, 799.0, "#84cc16", "GOOD"),
-                GaugeZone::new(799.0, 850.0, "#16a34a", "EXCELLENT"),
-            ],
-            ..Default::default()
-        };
-
-        draw_gauge_chart(&context, 500.0, 380.0, 800.0, &config);
-    }
-
-    #[wasm_bindgen_test]
-    fn test_draw_gauge_chart_progress_style() {
-        let Some(context) = mock_context() else {
-            return;
-        };
-
-        let config = GaugeChartConfig {
-            label: "Battery".to_string(),
-            unit: "%".to_string(),
-            ..Default::default()
-        };
-
-        draw_gauge_chart(&context, 500.0, 380.0, 72.0, &config);
-    }
-
-    #[wasm_bindgen_test]
-    fn test_draw_gauge_chart_small_canvas() {
-        let Some(context) = mock_context() else {
-            return;
-        };
-
-        let config = GaugeChartConfig {
-            min: 300.0,
-            max: 850.0,
-            zones: vec![
-                GaugeZone::new(300.0, 579.0, "#e11d48", "VERY POOR"),
-                GaugeZone::new(579.0, 669.0, "#d97706", "POOR"),
-                GaugeZone::new(669.0, 739.0, "#eab308", "FAIR"),
-                GaugeZone::new(739.0, 799.0, "#84cc16", "GOOD"),
-                GaugeZone::new(799.0, 850.0, "#16a34a", "EXCELLENT"),
-            ],
-            ..Default::default()
-        };
-
-        draw_gauge_chart(&context, 180.0, 140.0, 800.0, &config);
-    }
-}
+#[path = "tests.rs"]
+mod tests;

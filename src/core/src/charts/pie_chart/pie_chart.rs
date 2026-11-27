@@ -39,7 +39,7 @@ impl DataPoint {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct SlicePos {
     start_angle: f64,
     end_angle: f64,
@@ -48,6 +48,15 @@ struct SlicePos {
     center_y: f64,
     name: String,
     value: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PieLayout {
+    slices: Vec<SlicePos>,
+    center_x: f64,
+    center_y: f64,
+    radius: f64,
+    total: f64,
 }
 
 fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
@@ -60,9 +69,7 @@ fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
 
 #[component]
 pub fn PieChart(
-    /// Accepts a reactive signal — update data and the chart redraws automatically.
-    #[prop(into)]
-    data: MaybeProp<Vec<DataPoint>>,
+    #[prop(into)] data: MaybeProp<Vec<DataPoint>>,
     #[prop(optional, default = Default::default())] config: PieChartConfig,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
@@ -124,11 +131,11 @@ pub fn PieChart(
     };
 
     Effect::new(move |_| {
-        let _ = data.get(); // tracked
+        let _ = data.get();
         redraw();
     });
 
-    let redraw_for_observer = redraw.clone(); // redraw needs to be Fn, not FnOnce — see note below
+    let redraw_for_observer = redraw.clone();
     let UseResizeObserverReturn { stop, .. } =
         use_resize_observer(container_ref, move |_entries, _observer| {
             redraw_for_observer();
@@ -147,22 +154,8 @@ pub fn PieChart(
         let x = e.client_x() as f64 - rect.left();
         let y = e.client_y() as f64 - rect.top();
 
-        let hovered = slice_positions.get_value().into_iter().find(|s| {
-            let dx = x - s.center_x;
-            let dy = y - s.center_y;
-            let dist = (dx * dx + dy * dy).sqrt();
-
-            if dist > s.radius {
-                return false;
-            };
-
-            let mut angle = dy.atan2(dx);
-            if angle < 0.0 {
-                angle += 2.0 * PI;
-            }
-
-            angle >= s.start_angle && angle <= s.end_angle
-        });
+        let slices = slice_positions.get_value();
+        let hovered = find_slice_at(&slices, x, y);
 
         let tooltip_el: HtmlElement = tooltip.into();
         let style = tooltip_el.style();
@@ -175,17 +168,9 @@ pub fn PieChart(
                 format_int_with_commas(slice.value)
             ));
 
-            // measure after content is set so offset_width reflects the new content
             let tooltip_width = tooltip_el.offset_width() as f64;
             let canvas_width = canvas.client_width() as f64;
-            let gap = 10.0;
-
-            let left = if x + gap + tooltip_width > canvas_width {
-                // flip to the left side of the cursor
-                (x - gap - tooltip_width).max(0.0)
-            } else {
-                x + gap
-            };
+            let left = tooltip_left(x, tooltip_width, canvas_width, 10.0);
 
             let _ = style.set_property("left", &format!("{}px", left));
             let _ = style.set_property("top", &format!("{}px", y - 28.0));
@@ -234,38 +219,34 @@ pub fn PieChart(
     }
 }
 
-fn draw_pie_chart(
-    context: &CanvasRenderingContext2d,
-    width: f64,
-    height: f64,
-    data: &[DataPoint],
-) -> Vec<SlicePos> {
+fn compute_pie_layout(width: f64, height: f64, data: &[DataPoint]) -> Option<PieLayout> {
+    if data.is_empty() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+
     let center_x = width / 2.0;
     let center_y = height / 2.0;
     let radius = (width.min(height) / 2.0) - 5.0;
 
+    // Guard against negative/zero radius (tiny canvases) which would produce
+    // a canvas IndexSizeError and blank the chart.
+    if radius <= 0.0 {
+        return None;
+    }
+
     let total: f64 = data.iter().map(|d| d.value as f64).sum();
     if total == 0.0 {
-        return vec![];
-    };
-
-    context.clear_rect(0.0, 0.0, width, height);
+        return None;
+    }
 
     let mut start_angle = 0.0_f64;
-    let mut slice_positions = Vec::new();
+    let mut slices = Vec::with_capacity(data.len());
 
     for point in data {
         let slice_angle = point.value as f64 / total * 2.0 * PI;
         let end_angle = start_angle + slice_angle;
 
-        context.begin_path();
-        context.move_to(center_x, center_y);
-        let _ = context.arc(center_x, center_y, radius, start_angle, end_angle);
-        context.close_path();
-        context.set_fill_style_str(point.color.as_str());
-        context.fill();
-
-        slice_positions.push(SlicePos {
+        slices.push(SlicePos {
             start_angle,
             end_angle,
             radius,
@@ -278,39 +259,70 @@ fn draw_pie_chart(
         start_angle = end_angle;
     }
 
-    slice_positions
+    Some(PieLayout {
+        slices,
+        center_x,
+        center_y,
+        radius,
+        total,
+    })
+}
+
+fn draw_pie_chart(
+    context: &CanvasRenderingContext2d,
+    width: f64,
+    height: f64,
+    data: &[DataPoint],
+) -> Vec<SlicePos> {
+    let Some(layout) = compute_pie_layout(width, height, data) else {
+        return vec![];
+    };
+
+    context.clear_rect(0.0, 0.0, width, height);
+
+    for (i, slice) in layout.slices.iter().enumerate() {
+        context.begin_path();
+        context.move_to(slice.center_x, slice.center_y);
+        let _ = context.arc(
+            slice.center_x,
+            slice.center_y,
+            slice.radius,
+            slice.start_angle,
+            slice.end_angle,
+        );
+        context.close_path();
+        context.set_fill_style_str(&data[i].color);
+        context.fill();
+    }
+
+    layout.slices
+}
+
+fn normalize_angle(angle: f64, min: f64) -> f64 {
+    if angle < min { angle + 2.0 * PI } else { angle }
+}
+
+fn find_slice_at<'a>(slices: &'a [SlicePos], x: f64, y: f64) -> Option<&'a SlicePos> {
+    slices.iter().find(|s| {
+        let dx = x - s.center_x;
+        let dy = y - s.center_y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist > s.radius {
+            return false;
+        }
+        let angle = normalize_angle(dy.atan2(dx), 0.0);
+        angle >= s.start_angle && angle <= s.end_angle
+    })
+}
+
+fn tooltip_left(x: f64, tooltip_width: f64, canvas_width: f64, gap: f64) -> f64 {
+    if x + gap + tooltip_width > canvas_width {
+        (x - gap - tooltip_width).max(0.0)
+    } else {
+        x + gap
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use wasm_bindgen_test::*;
-
-    wasm_bindgen_test_configure!(run_in_browser);
-
-    fn mock_context() -> Option<CanvasRenderingContext2d> {
-        let document = web_sys::window()?.document()?;
-        let canvas = document
-            .create_element("canvas")
-            .ok()?
-            .dyn_into::<HtmlCanvasElement>()
-            .ok()?;
-        get_context(&canvas)
-    }
-
-    #[wasm_bindgen_test]
-    fn test_draw_pie_chart() {
-        let Some(context) = mock_context() else {
-            return;
-        };
-
-        let data = vec![
-            DataPoint::new("A", 10, "#ff0000"),
-            DataPoint::new("B", 20, "#00ff00"),
-            DataPoint::new("C", 30, "#0000ff"),
-            DataPoint::new("D", 40, "#ffff00"),
-        ];
-
-        draw_pie_chart(&context, 800.0, 600.0, &data);
-    }
-}
+#[path = "tests.rs"]
+mod tests;

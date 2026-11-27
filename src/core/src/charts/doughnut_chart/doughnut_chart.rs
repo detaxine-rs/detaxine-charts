@@ -22,7 +22,7 @@ impl Default for DoughnutChartConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct SegmentPos {
     start_angle: f64,
     end_angle: f64,
@@ -32,6 +32,16 @@ struct SegmentPos {
     label: String,
     value: i64,
     color: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DoughnutLayout {
+    segments: Vec<SegmentPos>,
+    center_x: f64,
+    center_y: f64,
+    radius: f64,
+    inner_radius: f64,
+    total: f64,
 }
 
 fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
@@ -44,10 +54,7 @@ fn get_context(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
 
 #[component]
 pub fn DoughnutChart(
-    /// Accepts a reactive signal — update data and the chart redraws automatically.
-    /// Each tuple is (label, value, color).
-    #[prop(into)]
-    data: MaybeProp<Vec<(String, i64, String)>>,
+    #[prop(into)] data: MaybeProp<Vec<(String, i64, String)>>,
     #[prop(optional, default = Default::default())] config: DoughnutChartConfig,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
@@ -109,11 +116,11 @@ pub fn DoughnutChart(
     };
 
     Effect::new(move |_| {
-        let _ = data.get(); // tracked
+        let _ = data.get();
         redraw();
     });
 
-    let redraw_for_observer = redraw.clone(); // redraw needs to be Fn, not FnOnce — see note below
+    let redraw_for_observer = redraw.clone();
     let UseResizeObserverReturn { stop, .. } =
         use_resize_observer(container_ref, move |_entries, _observer| {
             redraw_for_observer();
@@ -132,23 +139,8 @@ pub fn DoughnutChart(
         let x = e.client_x() as f64 - rect.left();
         let y = e.client_y() as f64 - rect.top();
 
-        let hovered = segment_positions.get_value().into_iter().find(|s| {
-            let dx = x - s.center_x;
-            let dy = y - s.center_y;
-            let dist = (dx * dx + dy * dy).sqrt();
-            let inner_radius = s.radius * 0.5;
-
-            if dist < inner_radius || dist > s.radius {
-                return false;
-            };
-
-            let mut angle = dy.atan2(dx);
-            if angle < -PI / 2.0 {
-                angle += 2.0 * PI;
-            }
-
-            angle >= s.start_angle && angle <= s.end_angle
-        });
+        let segments = segment_positions.get_value();
+        let hovered = find_segment_at(&segments, x, y);
 
         let tooltip_el: HtmlElement = tooltip.into();
         let style = tooltip_el.style();
@@ -160,17 +152,9 @@ pub fn DoughnutChart(
                 format_int_with_commas(seg.value)
             ));
 
-            // measure after content is set so offset_width reflects the new content
             let tooltip_width = tooltip_el.offset_width() as f64;
             let canvas_width = canvas.client_width() as f64;
-            let gap = 10.0;
-
-            let left = if x + gap + tooltip_width > canvas_width {
-                // flip to the left side of the cursor
-                (x - gap - tooltip_width).max(0.0)
-            } else {
-                x + gap
-            };
+            let left = tooltip_left(x, tooltip_width, canvas_width, 10.0);
 
             let _ = style.set_property("left", &format!("{}px", left));
             let _ = style.set_property("top", &format!("{}px", y - 28.0));
@@ -219,12 +203,15 @@ pub fn DoughnutChart(
     }
 }
 
-fn draw_doughnut_chart(
-    context: &CanvasRenderingContext2d,
+fn compute_doughnut_layout(
     width: f64,
     height: f64,
     data: &[(String, i64, String)],
-) -> Vec<SegmentPos> {
+) -> Option<DoughnutLayout> {
+    if data.is_empty() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+
     let center_x = width / 2.0;
     let center_y = height / 2.0;
     let radius = (width.min(height) / 2.0) * 0.85;
@@ -232,46 +219,17 @@ fn draw_doughnut_chart(
 
     let total: f64 = data.iter().map(|(_, value, _)| *value as f64).sum();
     if total == 0.0 {
-        return vec![];
-    };
-
-    context.clear_rect(0.0, 0.0, width, height);
+        return None;
+    }
 
     let mut start_angle = -PI / 2.0;
-    let mut segment_positions = Vec::new();
+    let mut segments = Vec::with_capacity(data.len());
 
     for (label, value, color) in data {
         let sweep_angle = (*value as f64 / total) * 2.0 * PI;
         let end_angle = start_angle + sweep_angle;
 
-        // fill segment
-        context.begin_path();
-        context.set_fill_style_str(color.as_str());
-        context.move_to(center_x, center_y);
-        let _ = context.arc(center_x, center_y, radius, start_angle, end_angle);
-        context.line_to(center_x, center_y);
-        context.fill();
-        context.close_path();
-
-        // outline segment
-        context.begin_path();
-        context.set_stroke_style_str("white");
-        context.set_line_width(2.0);
-        context.move_to(center_x, center_y);
-        let _ = context.arc(center_x, center_y, radius, start_angle, end_angle);
-        context.line_to(center_x, center_y);
-        context.stroke();
-        context.close_path();
-
-        // cut inner hole
-        context.begin_path();
-        let _ = context.set_global_composite_operation("destination-out");
-        let _ = context.arc(center_x, center_y, inner_radius, 0.0, 2.0 * PI);
-        context.fill();
-        context.close_path();
-        let _ = context.set_global_composite_operation("source-over");
-
-        segment_positions.push(SegmentPos {
+        segments.push(SegmentPos {
             start_angle,
             end_angle,
             radius,
@@ -285,38 +243,110 @@ fn draw_doughnut_chart(
         start_angle = end_angle;
     }
 
-    segment_positions
+    Some(DoughnutLayout {
+        segments,
+        center_x,
+        center_y,
+        radius,
+        inner_radius,
+        total,
+    })
+}
+
+fn draw_doughnut_chart(
+    context: &CanvasRenderingContext2d,
+    width: f64,
+    height: f64,
+    data: &[(String, i64, String)],
+) -> Vec<SegmentPos> {
+    let Some(layout) = compute_doughnut_layout(width, height, data) else {
+        return vec![];
+    };
+
+    context.clear_rect(0.0, 0.0, width, height);
+
+    for seg in &layout.segments {
+        // fill segment
+        context.begin_path();
+        context.set_fill_style_str(&seg.color);
+        context.move_to(seg.center_x, seg.center_y);
+        let _ = context.arc(
+            seg.center_x,
+            seg.center_y,
+            seg.radius,
+            seg.start_angle,
+            seg.end_angle,
+        );
+        context.line_to(seg.center_x, seg.center_y);
+        context.fill();
+        context.close_path();
+
+        // outline segment
+        context.begin_path();
+        context.set_stroke_style_str("white");
+        context.set_line_width(2.0);
+        context.move_to(seg.center_x, seg.center_y);
+        let _ = context.arc(
+            seg.center_x,
+            seg.center_y,
+            seg.radius,
+            seg.start_angle,
+            seg.end_angle,
+        );
+        context.line_to(seg.center_x, seg.center_y);
+        context.stroke();
+        context.close_path();
+
+        // cut inner hole
+        context.begin_path();
+        let _ = context.set_global_composite_operation("destination-out");
+        let _ = context.arc(
+            seg.center_x,
+            seg.center_y,
+            layout.inner_radius,
+            0.0,
+            2.0 * PI,
+        );
+        context.fill();
+        context.close_path();
+        let _ = context.set_global_composite_operation("source-over");
+    }
+
+    layout.segments
+}
+
+fn normalize_angle(angle: f64) -> f64 {
+    if angle < -PI / 2.0 {
+        angle + 2.0 * PI
+    } else {
+        angle
+    }
+}
+
+fn find_segment_at<'a>(segments: &'a [SegmentPos], x: f64, y: f64) -> Option<&'a SegmentPos> {
+    segments.iter().find(|s| {
+        let dx = x - s.center_x;
+        let dy = y - s.center_y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        let inner_radius = s.radius * 0.5;
+
+        if dist < inner_radius || dist > s.radius {
+            return false;
+        }
+
+        let angle = normalize_angle(dy.atan2(dx));
+        angle >= s.start_angle && angle <= s.end_angle
+    })
+}
+
+fn tooltip_left(x: f64, tooltip_width: f64, canvas_width: f64, gap: f64) -> f64 {
+    if x + gap + tooltip_width > canvas_width {
+        (x - gap - tooltip_width).max(0.0)
+    } else {
+        x + gap
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use wasm_bindgen_test::*;
-
-    wasm_bindgen_test_configure!(run_in_browser);
-
-    fn mock_context() -> Option<CanvasRenderingContext2d> {
-        let document = web_sys::window()?.document()?;
-        let canvas = document
-            .create_element("canvas")
-            .ok()?
-            .dyn_into::<HtmlCanvasElement>()
-            .ok()?;
-        get_context(&canvas)
-    }
-
-    #[wasm_bindgen_test]
-    fn test_draw_doughnut_chart() {
-        let Some(context) = mock_context() else {
-            return;
-        };
-
-        let data = vec![
-            ("A".to_string(), 10, "#ff0000".to_string()),
-            ("B".to_string(), 20, "#00ff00".to_string()),
-            ("C".to_string(), 30, "#0000ff".to_string()),
-        ];
-
-        draw_doughnut_chart(&context, 500.0, 500.0, &data);
-    }
-}
+#[path = "tests.rs"]
+mod tests;
