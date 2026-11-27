@@ -11,9 +11,9 @@ fn empty_data_produces_no_layout() {
 }
 
 #[wasm_bindgen_test]
-fn flat_data_produces_no_layout() {
-    // all candles share the same high/low → value_range == 0
-    let data = vec![Candle::new("Mon", 100.0, 100.0, 100.0, 100.0)];
+fn all_zero_candles_produce_no_layout() {
+    // Padding is ×1.05 / ×0.95, so only all-zero highs/lows give value_range == 0.
+    let data = vec![Candle::new("Mon", 0.0, 0.0, 0.0, 0.0)];
     assert!(compute_candle_layout(800.0, 480.0, &data).is_none());
 }
 
